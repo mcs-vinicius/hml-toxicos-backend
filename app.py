@@ -13,7 +13,6 @@ app = Flask(__name__)
 
 # --- Configurações Iniciais ---
 prod_origin = os.environ.get('FRONTEND_URL', 'https://hml-toxicos-frontend.vercel.app')
-
 CORS(
     app,
     origins=prod_origin if prod_origin else "*",
@@ -21,7 +20,6 @@ CORS(
     supports_credentials=True,
     expose_headers=["Content-Type", "Authorization"]
 )
-
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))
 app.config['SESSION_COOKIE_SAMESITE'] = 'None'
 app.config['SESSION_COOKIE_SECURE'] = True
@@ -31,6 +29,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # --- Modelos do Banco de Dados ---
+# ... (Seus modelos permanecem exatamente os mesmos)
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -126,6 +125,7 @@ class HonorParticipant(db.Model):
 #with app.app_context():
 #    db.create_all()
 
+
 # --- Decorators ---
 def login_required(f):
     @wraps(f)
@@ -147,7 +147,16 @@ def roles_required(allowed_roles):
         return decorated_function
     return wrapper
 
-# --- Rotas de Autenticação e Usuários ---
+# --- Função Auxiliar para Normalização ---
+def normalize_status(value):
+    """Normaliza uma string para 'Sim' ou 'Não' de forma flexível."""
+    if isinstance(value, str) and value.strip().lower().startswith('s'):
+        return 'Sim'
+    return 'Não'
+
+# --- Rotas de Usuário, Perfil, Temporada (sem alteração) ---
+# ... (todas as rotas desde /register-user até /history ficam aqui, inalteradas)
+# --- ROTAS DE HONRA (ATUALIZADAS) ---
 @app.route('/register-user', methods=['POST'])
 def register_user():
     data = request.json
@@ -434,8 +443,6 @@ def get_user_history(habby_id):
     except Exception as e:
         print(f"Error fetching history for {habby_id}: {e}")
         return jsonify({'error': 'Erro ao buscar histórico.'}), 500
-
-# --- Rotas de Honra ---
 @app.route('/honor-members-management', methods=['GET'])
 @roles_required(['admin', 'leader'])
 def get_honor_management_list():
@@ -449,6 +456,41 @@ def get_honor_management_list():
     } for p in latest_season.participants]
     return jsonify(participants)
 
+# ROTA NOVA: Salva as alterações da lista de gerenciamento atual
+@app.route('/honor-seasons/latest/update', methods=['PUT'])
+@roles_required(['admin', 'leader'])
+def update_latest_honor_season():
+    participants_data = request.json
+    if not participants_data:
+        return jsonify({'error': 'A lista de participantes não pode estar vazia.'}), 400
+
+    latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
+    if not latest_season:
+        return jsonify({'error': 'Nenhuma temporada de honra para atualizar.'}), 404
+
+    try:
+        # Apaga os participantes antigos para substituí-los pela nova lista
+        HonorParticipant.query.filter_by(season_id=latest_season.id).delete()
+
+        # Adiciona os novos participantes com os dados atualizados
+        for index, p_data in enumerate(participants_data):
+            new_participant = HonorParticipant(
+                season_id=latest_season.id,
+                name=p_data['name'],
+                habby_id=p_data['habby_id'],
+                fase_acesso=normalize_status(p_data.get('fase_acesso')),
+                fase_ataque=normalize_status(p_data.get('fase_ataque')),
+                sort_order=index
+            )
+            db.session.add(new_participant)
+        
+        db.session.commit()
+        return jsonify({'message': 'Lista de honra atualizada com sucesso!'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Erro ao atualizar a lista: {e}'}), 500
+
+# ROTA ATUALIZADA: Cria um novo registro de temporada (Finalizar)
 @app.route('/honor-seasons', methods=['POST'])
 @roles_required(['admin', 'leader'])
 def create_honor_season():
@@ -469,23 +511,21 @@ def create_honor_season():
         db.session.flush()
 
         for index, p_data in enumerate(participants_data):
-            raw_acesso = p_data.get('fase_acesso', 'Não')
-            raw_ataque = p_data.get('fase_ataque', 'Não')
-            
-            fase_acesso_norm = 'Sim' if isinstance(raw_acesso, str) and raw_acesso.strip().lower().startswith('s') else 'Não'
-            fase_ataque_norm = 'Sim' if isinstance(raw_ataque, str) and raw_ataque.strip().lower().startswith('s') else 'Não'
-
             new_participant = HonorParticipant(
-                season_id=new_season.id, name=p_data['name'], habby_id=p_data['habby_id'],
-                fase_acesso=fase_acesso_norm, fase_ataque=fase_ataque_norm, sort_order=index
+                season_id=new_season.id,
+                name=p_data['name'],
+                habby_id=p_data['habby_id'],
+                fase_acesso=normalize_status(p_data.get('fase_acesso')),
+                fase_ataque=normalize_status(p_data.get('fase_ataque')),
+                sort_order=index
             )
             db.session.add(new_participant)
             
         db.session.commit()
-        return jsonify({'message': 'Temporada de Honra salva com sucesso!', 'seasonId': new_season.id}), 201
+        return jsonify({'message': 'Nova temporada de Honra criada com sucesso!', 'seasonId': new_season.id}), 201
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': f'Erro ao salvar temporada de honra: {e}'}), 500
+        return jsonify({'error': f'Erro ao criar nova temporada: {e}'}), 500
 
 @app.route('/honor-seasons', methods=['GET'])
 def get_honor_seasons():

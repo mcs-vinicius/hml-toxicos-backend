@@ -128,8 +128,8 @@ class HomeContent(db.Model):
     about_us = db.Column(db.Text)
     content_section = db.Column(db.Text)
 
-with app.app_context():
-    db.create_all()
+#with app.app_context():
+#    db.create_all()
 
 # --- Decorators e Endpoints ---
 # (O restante do seu código de rotas permanece o mesmo)
@@ -533,6 +533,25 @@ def create_tables():
         print("Criando tabelas no banco de dados...")
         db.create_all()
         print("Tabelas criadas com sucesso.")
+
+        # Verifica se o conteúdo inicial da home já existe
+        if not HomeContent.query.get(1):
+            print("Inserindo conteúdo inicial da Home...")
+            # Cria um registro padrão para a Home
+            default_content = HomeContent(
+                id=1,
+                leader='Líder a definir',
+                focus='Foco a definir',
+                league='Liga a definir',
+                requirements='Requisitos a definir',
+                about_us='Sobre nós a definir.',
+                content_section='Seção de conteúdo a definir.'
+            )
+            db.session.add(default_content)
+            db.session.commit()
+            print("Conteúdo inicial da Home inserido com sucesso.")
+        else:
+            print("Conteúdo inicial da Home já existe. Nenhuma ação necessária.")
 
 if __name__ == '__main__':
     import sys

@@ -30,7 +30,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# --- Modelos do Banco de Dados (Schema) ---
+# --- Modelos do Banco de Dados ---
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -104,15 +104,13 @@ class HomeContent(db.Model):
     focus = db.Column(db.String(255))
     league = db.Column(db.String(255))
     requirements = db.Column(db.Text)
-    content_section = db.Column(db.Text) # about_us foi removido daqui
+    content_section = db.Column(db.Text)
 
-# --- NOVOS MODELOS PARA A FUNCIONALIDADE DE HONRA ---
 class HonorSeason(db.Model):
     __tablename__ = 'honor_seasons'
     id = db.Column(db.Integer, primary_key=True)
     start_date = db.Column(db.Date, nullable=False)
     end_date = db.Column(db.Date, nullable=False)
-    # A ordenação será feita por 'sort_order' para garantir a sequência correta
     participants = db.relationship('HonorParticipant', backref='season', cascade="all, delete-orphan", order_by="HonorParticipant.sort_order")
 
 class HonorParticipant(db.Model):
@@ -123,18 +121,17 @@ class HonorParticipant(db.Model):
     habby_id = db.Column(db.String(50), nullable=False)
     fase_acesso = db.Column(db.String(10), nullable=False)
     fase_ataque = db.Column(db.String(10), nullable=False)
-    # Campo para manter a ordem da lista definida no frontend
-    sort_order = db.Column(db.Integer, nullable=False) 
+    sort_order = db.Column(db.Integer, nullable=False)
 
 #with app.app_context():
 #    db.create_all()
 
-# --- Decorators e Endpoints ---
+# --- Decorators ---
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'user_id' not in session:
-            return jsonify({'error': 'Acesso não autorizado. Por favor, faça login.'}), 401
+            return jsonify({'error': 'Acesso não autorizado.'}), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -145,12 +142,12 @@ def roles_required(allowed_roles):
             if 'user_id' not in session:
                 return jsonify({'error': 'Acesso não autorizado.'}), 401
             if session.get('role') not in allowed_roles:
-                return jsonify({'error': 'Permissão insuficiente para este recurso.'}), 403
+                return jsonify({'error': 'Permissão insuficiente.'}), 403
             return f(*args, **kwargs)
         return decorated_function
     return wrapper
 
-# --- ROTAS DE AUTENTICAÇÃO E USUÁRIOS (sem alteração) ---
+# --- Rotas de Autenticação e Usuários ---
 @app.route('/register-user', methods=['POST'])
 def register_user():
     data = request.json
@@ -229,12 +226,10 @@ def get_users():
         User.id, User.username, User.role, UserProfile.habby_id, UserProfile.nick, UserProfile.profile_pic_url
     ).join(UserProfile, User.id == UserProfile.user_id).order_by(User.role, User.username).all()
     
-    users = [
-        {
-            'id': u.id, 'username': u.username, 'role': u.role, 'habby_id': u.habby_id,
-            'nick': u.nick, 'profile_pic_url': u.profile_pic_url
-        } for u in users_data
-    ]
+    users = [{
+        'id': u.id, 'username': u.username, 'role': u.role, 'habby_id': u.habby_id,
+        'nick': u.nick, 'profile_pic_url': u.profile_pic_url
+    } for u in users_data]
     return jsonify(users), 200
 
 @app.route('/users/<int:user_id>/role', methods=['PUT'])
@@ -245,6 +240,7 @@ def update_user_role(user_id):
 
     if new_role not in ['member', 'leader']:
         return jsonify({'error': 'Role inválida.'}), 400
+
     if session.get('user_id') == user_id:
         return jsonify({'error': 'O administrador não pode alterar seu próprio nível.'}), 403
 
@@ -272,6 +268,7 @@ def delete_user(user_id):
     user_to_delete = User.query.get(user_id)
     if not user_to_delete:
         return jsonify({'error': 'Usuário não encontrado.'}), 404
+
     if logged_in_user_role == 'leader' and user_to_delete.role in ['leader', 'admin']:
         return jsonify({'error': 'Líderes só podem excluir membros.'}), 403
 
@@ -283,7 +280,7 @@ def delete_user(user_id):
         db.session.rollback()
         return jsonify({'error': f'Erro ao excluir usuário: {e}'}), 500
 
-# --- ROTAS DE PERFIL (sem alteração) ---
+# --- Rotas de Perfil e Busca ---
 @app.route('/search-users', methods=['GET'])
 @login_required
 def search_users():
@@ -302,7 +299,7 @@ def get_user_profile(habby_id):
     profile = UserProfile.query.filter_by(habby_id=habby_id).first()
     if not profile:
         return jsonify({'error': 'Perfil não encontrado.'}), 404
-    return jsonify({c.name: getattr(profile, c.name) for c in profile.__table__.columns}), 200
+    return jsonify({c.name: getattr(profile, c.name) for c in profile.__table__.columns})
 
 @app.route('/profile', methods=['PUT'])
 @login_required
@@ -339,23 +336,19 @@ def update_user_profile():
         db.session.rollback()
         return jsonify({'error': f'Erro ao atualizar perfil: {e}'}), 500
 
-# --- ROTAS DE TEMPORADAS (RANKING) (sem alteração) ---
+# --- Rotas de Temporada (Ranking) ---
 @app.route('/seasons', methods=['GET'])
 def get_seasons():
     seasons = Season.query.order_by(Season.start_date.asc()).all()
     result = []
     for s in seasons:
-        participants_data = [
-            {
-                'id': p.id, 'habby_id': p.habby_id, 'name': p.name, 'fase': p.fase,
-                'r1': p.r1, 'r2': p.r2, 'r3': p.r3, 'total': p.total
-            } for p in s.participants
-        ]
+        participants_data = [{
+            'id': p.id, 'habby_id': p.habby_id, 'name': p.name, 'fase': p.fase,
+            'r1': p.r1, 'r2': p.r2, 'r3': p.r3, 'total': p.total
+        } for p in s.participants]
         result.append({
-            'id': s.id,
-            'start_date': s.start_date.isoformat(),
-            'end_date': s.end_date.isoformat(),
-            'participants': participants_data
+            'id': s.id, 'start_date': s.start_date.isoformat(),
+            'end_date': s.end_date.isoformat(), 'participants': participants_data
         })
     return jsonify(result)
 
@@ -373,7 +366,6 @@ def create_season():
     try:
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-        
         new_season = Season(start_date=start_date, end_date=end_date)
         db.session.add(new_season)
         db.session.flush()
@@ -388,7 +380,6 @@ def create_season():
         
         db.session.commit()
         return jsonify({'message': 'Temporada criada com sucesso!', 'seasonId': new_season.id}), 201
-
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Erro ao criar temporada: {e}'}), 500
@@ -407,11 +398,10 @@ def delete_season(season_id):
         db.session.rollback()
         return jsonify({'error': f'Erro ao excluir a temporada: {e}'}), 500
 
-# --- ROTAS DE HISTÓRICO (sem alteração) ---
+# --- Rota de Histórico ---
 @app.route('/history/<string:habby_id>', methods=['GET'])
 @login_required
 def get_user_history(habby_id):
-    # Esta rota permanece como está
     try:
         participations = db.session.query(
             Season.id.label('season_id'), Season.start_date, Participant.fase,
@@ -423,15 +413,42 @@ def get_user_history(habby_id):
         if not participations:
             return jsonify([]), 200
 
-        # O restante da lógica de histórico permanece o mesmo
-        # ...
-        return jsonify([]), 200 # Simplificado para brevidade
-        
+        history = []
+        for i, current in enumerate(participations):
+            season_id = current.season_id
+            season_ranking = Participant.query.filter_by(season_id=season_id).order_by(Participant.fase.desc()).all()
+            position = next((idx + 1 for idx, p in enumerate(season_ranking) if p.habby_id == habby_id), None)
+            
+            evolution = '-'
+            if i + 1 < len(participations):
+                previous = participations[i + 1]
+                if current.fase is not None and previous.fase is not None:
+                    evolution = current.fase - previous.fase
+            
+            history.append({
+                'season_id': season_id, 'start_date': current.start_date.strftime('%Y-%m-%d'),
+                'position': position, 'fase_acesso': current.fase, 'evolution': evolution
+            })
+
+        return jsonify(history), 200
     except Exception as e:
-        print(f"Error fetching history: {e}")
+        print(f"Error fetching history for {habby_id}: {e}")
         return jsonify({'error': 'Erro ao buscar histórico.'}), 500
 
-# --- NOVAS ROTAS PARA A FUNCIONALIDADE DE HONRA ---
+# --- Rotas de Honra ---
+@app.route('/honor-members-management', methods=['GET'])
+@roles_required(['admin', 'leader'])
+def get_honor_management_list():
+    latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
+    if not latest_season:
+        return jsonify([])
+
+    participants = [{
+        'name': p.name, 'habby_id': p.habby_id,
+        'fase_acesso': p.fase_acesso, 'fase_ataque': p.fase_ataque
+    } for p in latest_season.participants]
+    return jsonify(participants)
+
 @app.route('/honor-seasons', methods=['POST'])
 @roles_required(['admin', 'leader'])
 def create_honor_season():
@@ -441,7 +458,7 @@ def create_honor_season():
     participants_data = data.get('participants', [])
 
     if not start_date_str or not end_date_str or not participants_data:
-        return jsonify({'error': 'Datas de início, fim e a lista de participantes são obrigatórias.'}), 400
+        return jsonify({'error': 'Datas e participantes são obrigatórios.'}), 400
 
     try:
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
@@ -449,77 +466,64 @@ def create_honor_season():
         
         new_season = HonorSeason(start_date=start_date, end_date=end_date)
         db.session.add(new_season)
-        db.session.flush() # Para obter o ID da nova temporada
+        db.session.flush()
 
         for index, p_data in enumerate(participants_data):
+            raw_acesso = p_data.get('fase_acesso', 'Não')
+            raw_ataque = p_data.get('fase_ataque', 'Não')
+            
+            fase_acesso_norm = 'Sim' if isinstance(raw_acesso, str) and raw_acesso.strip().lower().startswith('s') else 'Não'
+            fase_ataque_norm = 'Sim' if isinstance(raw_ataque, str) and raw_ataque.strip().lower().startswith('s') else 'Não'
+
             new_participant = HonorParticipant(
-                season_id=new_season.id,
-                name=p_data['name'],
-                habby_id=p_data['habby_id'],
-                fase_acesso=p_data.get('fase_acesso', 'Não'),
-                fase_ataque=p_data.get('fase_ataque', 'Não'),
-                sort_order=index # Salva a posição exata da lista
+                season_id=new_season.id, name=p_data['name'], habby_id=p_data['habby_id'],
+                fase_acesso=fase_acesso_norm, fase_ataque=fase_ataque_norm, sort_order=index
             )
             db.session.add(new_participant)
             
         db.session.commit()
-        return jsonify({'message': 'Temporada de Honra criada com sucesso!', 'seasonId': new_season.id}), 201
+        return jsonify({'message': 'Temporada de Honra salva com sucesso!', 'seasonId': new_season.id}), 201
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': f'Erro ao criar temporada de honra: {e}'}), 500
+        return jsonify({'error': f'Erro ao salvar temporada de honra: {e}'}), 500
 
 @app.route('/honor-seasons', methods=['GET'])
 def get_honor_seasons():
     seasons = HonorSeason.query.order_by(HonorSeason.start_date.asc()).all()
     result = []
     for s in seasons:
-        # A relação já busca os participantes ordenados por 'sort_order'
-        participants_data = [
-            {
-                'id': p.id, 'name': p.name, 'habby_id': p.habby_id,
-                'fase_acesso': p.fase_acesso, 'fase_ataque': p.fase_ataque
-            } for p in s.participants
-        ]
+        participants_data = [{
+            'id': p.id, 'name': p.name, 'habby_id': p.habby_id,
+            'fase_acesso': p.fase_acesso, 'fase_ataque': p.fase_ataque
+        } for p in s.participants]
         result.append({
-            'id': s.id,
-            'start_date': s.start_date.isoformat(),
-            'end_date': s.end_date.isoformat(),
-            'participants': participants_data
+            'id': s.id, 'start_date': s.start_date.isoformat(),
+            'end_date': s.end_date.isoformat(), 'participants': participants_data
         })
     return jsonify(result)
 
 @app.route('/latest-honor-members', methods=['GET'])
 def get_latest_honor_members():
-    # Busca a temporada de honra mais recente
     latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
-    
     if not latest_season:
-        return jsonify({'members': [], 'period': 'Nenhuma temporada de honra definida.'})
+        return jsonify({'members': [], 'period': 'Nenhuma temporada definida.'})
 
-    # Busca os 3 primeiros participantes, que já estão ordenados corretamente
     top_three = HonorParticipant.query.filter_by(season_id=latest_season.id)\
         .order_by(HonorParticipant.sort_order.asc()).limit(3).all()
         
     members = [{'name': p.name, 'habby_id': p.habby_id} for p in top_three]
-    
     period = f"De: {latest_season.start_date.strftime('%d/%m/%Y')} a Até: {latest_season.end_date.strftime('%d/%m/%Y')}"
-    
     return jsonify({'members': members, 'period': period})
 
-
-# --- ROTAS DE CONTEÚDO DA HOME (MODIFICADAS) ---
+# --- Rotas de Conteúdo da Home ---
 @app.route('/home-content', methods=['GET'])
 def get_home_content():
     content = HomeContent.query.get(1)
     if content:
         requirements_list = content.requirements.split(';') if content.requirements else []
         return jsonify({
-            'leader': content.leader,
-            'focus': content.focus,
-            'league': content.league,
-            'requirements': requirements_list,
-            'content_section': content.content_section
-            # O campo 'about_us' foi removido
+            'leader': content.leader, 'focus': content.focus, 'league': content.league,
+            'requirements': requirements_list, 'content_section': content.content_section
         })
     return jsonify({'error': 'Conteúdo não encontrado.'}), 404
 
@@ -532,49 +536,37 @@ def update_home_content():
         return jsonify({'error': 'Conteúdo não encontrado para atualizar.'}), 404
 
     requirements_str = ';'.join(data.get('requirements', []))
-    
     try:
         content.leader = data.get('leader')
         content.focus = data.get('focus')
         content.league = data.get('league')
         content.requirements = requirements_str
         content.content_section = data.get('content_section')
-        # O campo 'about_us' foi removido
-        
         db.session.commit()
         return jsonify({'message': 'Conteúdo da Home atualizado com sucesso!'})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Erro ao atualizar conteúdo: {e}'}), 500
 
-# --- FUNÇÃO DE INICIALIZAÇÃO DO BANCO DE DADOS (MODIFICADA) ---
+# --- Função de Inicialização ---
 def create_tables():
     with app.app_context():
         print("Criando/Verificando todas as tabelas no banco de dados...")
-        db.create_all() # Isso criará as novas tabelas HonorSeason e HonorParticipant
+        db.create_all()
         print("Tabelas prontas.")
-
-        # Verifica se o conteúdo inicial da home já existe
         if not HomeContent.query.get(1):
             print("Inserindo conteúdo inicial da Home...")
             default_content = HomeContent(
-                id=1,
-                leader='Líder a definir',
-                focus='Foco a definir',
-                league='Liga a definir',
-                requirements='Requisito 1 a definir;Requisito 2 a definir;Requisito 3 a definir',
-                # about_us não é mais necessário aqui
+                id=1, leader='Líder a definir', focus='Foco a definir',
+                league='Liga a definir', requirements='Requisito 1;Requisito 2',
                 content_section='Seção de conteúdo a definir.'
             )
             db.session.add(default_content)
             db.session.commit()
-            print("Conteúdo inicial da Home inserido com sucesso.")
-        else:
-            print("Conteúdo da Home já existe.")
+            print("Conteúdo inicial inserido.")
 
 if __name__ == '__main__':
     import sys
-    # Permite executar 'python App.py init-db' para criar as tabelas
     if len(sys.argv) > 1 and sys.argv[1] == 'init-db':
         create_tables()
     else:

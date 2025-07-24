@@ -13,7 +13,7 @@ app = Flask(__name__)
 
 # --- Configurações Iniciais ---
 # URL do frontend em produção
-prod_origin = os.environ.get('FRONTEND_URL', 'https://clatoxicos.vercel.app')
+prod_origin = os.environ.get('FRONTEND_URL', 'https://hml-toxicos-frontend.vercel.app/')
 
 # --- ALTERAÇÃO 1: Configuração de CORS e Cookie ---
 # Habilita o CORS para todas as origens durante o desenvolvimento se nenhuma URL de frontend for definida.
@@ -45,8 +45,8 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 #USAR APENAS UMA VEZ NO PRIMEIRO DEPLOY PARA CONSTRUÇÃO DO BANCO DE DADOS
-with app.app_context():
-    db.create_all()
+#with app.app_context():
+#    db.create_all()
 
 
 # --- Modelos do Banco de Dados (Schema) ---

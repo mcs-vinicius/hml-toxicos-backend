@@ -128,8 +128,8 @@ class HomeContent(db.Model):
     about_us = db.Column(db.Text)
     content_section = db.Column(db.Text)
 
-#with app.app_context():
-#    db.create_all()
+with app.app_context():
+    db.create_all()
 
 # --- Decorators e Endpoints ---
 # (O restante do seu código de rotas permanece o mesmo)

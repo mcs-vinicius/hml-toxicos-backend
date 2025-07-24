@@ -13,7 +13,7 @@ app = Flask(__name__)
 
 # --- Configurações Iniciais ---
 # URL do frontend em produção
-prod_origin = os.environ.get('FRONTEND_URL', 'https://hml-toxicos-frontend.vercel.app/')
+prod_origin = os.environ.get('FRONTEND_URL', 'https://hml-toxicos-frontend.vercel.app')
 
 # --- ALTERAÇÃO 1: Configuração de CORS e Cookie ---
 # Habilita o CORS para todas as origens durante o desenvolvimento se nenhuma URL de frontend for definida.

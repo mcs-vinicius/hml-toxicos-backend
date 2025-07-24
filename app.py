@@ -44,6 +44,11 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
+#USAR APENAS UMA VEZ NO PRIMEIRO DEPLOY PARA CONSTRUÇÃO DO BANCO DE DADOS
+with app.app_context():
+    db.create_all()
+
+
 # --- Modelos do Banco de Dados (Schema) ---
 # (O restante do seu código de modelos permanece o mesmo)
 class User(db.Model):
@@ -123,9 +128,7 @@ class HomeContent(db.Model):
     about_us = db.Column(db.Text)
     content_section = db.Column(db.Text)
 
-#USAR APENAS UMA VEZ NO PRIMEIRO DEPLOY PARA CONSTRUÇÃO DO BANCO DE DADOS
-# with app.app_context():
-#     db.create_all()
+
 
 # --- Decorators e Endpoints ---
 # (O restante do seu código de rotas permanece o mesmo)

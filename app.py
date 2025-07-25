@@ -527,6 +527,28 @@ def get_latest_honor_members():
     period = f"De: {latest_season.start_date.strftime('%d/%m/%Y')} a Até: {latest_season.end_date.strftime('%d/%m/%Y')}"
     return jsonify({'members': members, 'period': period})
 
+# --- destaque para o membro de honra ---
+
+@app.route('/honor-status/<string:habby_id>', methods=['GET'])
+def get_honor_status(habby_id):
+    """Verifica se um habby_id pertence aos Membros de Honra atuais."""
+    latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
+    
+    if not latest_season:
+        return jsonify({'is_honor_member': False})
+
+    # Busca os IDs dos 2 membros de honra atuais
+    top_members_ids = [
+        p.habby_id for p in HonorParticipant.query
+        .filter_by(season_id=latest_season.id)
+        .order_by(HonorParticipant.sort_order.asc())
+        .limit(2).all()
+    ]
+    
+    is_member = habby_id in top_members_ids
+    
+    return jsonify({'is_honor_member': is_member})
+
 # --- Rotas de Conteúdo da Home ---
 @app.route('/home-content', methods=['GET'])
 def get_home_content():

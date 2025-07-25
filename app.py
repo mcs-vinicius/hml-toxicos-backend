@@ -28,8 +28,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# --- Modelos do Banco de Dados ---
-# ... (Seus modelos permanecem exatamente os mesmos)
+# --- Modelos do Banco de Dados (sem alterações) ---
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -121,11 +120,6 @@ class HonorParticipant(db.Model):
     fase_acesso = db.Column(db.String(10), nullable=False)
     fase_ataque = db.Column(db.String(10), nullable=False)
     sort_order = db.Column(db.Integer, nullable=False)
-
-#with app.app_context():
-#    db.create_all()
-
-
 # --- Decorators ---
 def login_required(f):
     @wraps(f)
@@ -149,7 +143,6 @@ def roles_required(allowed_roles):
 
 # --- Função Auxiliar para Normalização ---
 def normalize_status(value):
-    """Normaliza uma string para 'Sim' ou 'Não' de forma flexível."""
     if isinstance(value, str) and value.strip().lower().startswith('s'):
         return 'Sim'
     return 'Não'
@@ -456,41 +449,6 @@ def get_honor_management_list():
     } for p in latest_season.participants]
     return jsonify(participants)
 
-# ROTA NOVA: Salva as alterações da lista de gerenciamento atual
-@app.route('/honor-seasons/latest/update', methods=['PUT'])
-@roles_required(['admin', 'leader'])
-def update_latest_honor_season():
-    participants_data = request.json
-    if not participants_data:
-        return jsonify({'error': 'A lista de participantes não pode estar vazia.'}), 400
-
-    latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
-    if not latest_season:
-        return jsonify({'error': 'Nenhuma temporada de honra para atualizar.'}), 404
-
-    try:
-        # Apaga os participantes antigos para substituí-los pela nova lista
-        HonorParticipant.query.filter_by(season_id=latest_season.id).delete()
-
-        # Adiciona os novos participantes com os dados atualizados
-        for index, p_data in enumerate(participants_data):
-            new_participant = HonorParticipant(
-                season_id=latest_season.id,
-                name=p_data['name'],
-                habby_id=p_data['habby_id'],
-                fase_acesso=normalize_status(p_data.get('fase_acesso')),
-                fase_ataque=normalize_status(p_data.get('fase_ataque')),
-                sort_order=index
-            )
-            db.session.add(new_participant)
-        
-        db.session.commit()
-        return jsonify({'message': 'Lista de honra atualizada com sucesso!'}), 200
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'Erro ao atualizar a lista: {e}'}), 500
-
-# ROTA ATUALIZADA: Cria um novo registro de temporada (Finalizar)
 @app.route('/honor-seasons', methods=['POST'])
 @roles_required(['admin', 'leader'])
 def create_honor_season():
@@ -512,9 +470,7 @@ def create_honor_season():
 
         for index, p_data in enumerate(participants_data):
             new_participant = HonorParticipant(
-                season_id=new_season.id,
-                name=p_data['name'],
-                habby_id=p_data['habby_id'],
+                season_id=new_season.id, name=p_data['name'], habby_id=p_data['habby_id'],
                 fase_acesso=normalize_status(p_data.get('fase_acesso')),
                 fase_ataque=normalize_status(p_data.get('fase_ataque')),
                 sort_order=index
@@ -542,16 +498,32 @@ def get_honor_seasons():
         })
     return jsonify(result)
 
+# ROTA NOVA: Excluir uma temporada de honra específica
+@app.route('/honor-seasons/<int:season_id>', methods=['DELETE'])
+@roles_required(['admin'])
+def delete_honor_season(season_id):
+    season_to_delete = HonorSeason.query.get(season_id)
+    if not season_to_delete:
+        return jsonify({'error': 'Temporada de honra não encontrada.'}), 404
+    try:
+        db.session.delete(season_to_delete)
+        db.session.commit()
+        return jsonify({'message': 'Temporada de honra excluída com sucesso!'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Erro ao excluir temporada de honra: {e}'}), 500
+
 @app.route('/latest-honor-members', methods=['GET'])
 def get_latest_honor_members():
     latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
     if not latest_season:
         return jsonify({'members': [], 'period': 'Nenhuma temporada definida.'})
 
-    top_three = HonorParticipant.query.filter_by(season_id=latest_season.id)\
-        .order_by(HonorParticipant.sort_order.asc()).limit(3).all()
+    # AJUSTE: MUDOU DE .limit(3) para .limit(2)
+    top_members = HonorParticipant.query.filter_by(season_id=latest_season.id)\
+        .order_by(HonorParticipant.sort_order.asc()).limit(2).all()
         
-    members = [{'name': p.name, 'habby_id': p.habby_id} for p in top_three]
+    members = [{'name': p.name, 'habby_id': p.habby_id} for p in top_members]
     period = f"De: {latest_season.start_date.strftime('%d/%m/%Y')} a Até: {latest_season.end_date.strftime('%d/%m/%Y')}"
     return jsonify({'members': members, 'period': period})
 

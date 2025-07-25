@@ -120,6 +120,11 @@ class HonorParticipant(db.Model):
     fase_acesso = db.Column(db.String(10), nullable=False)
     fase_ataque = db.Column(db.String(10), nullable=False)
     sort_order = db.Column(db.Integer, nullable=False)
+
+#with app.app_context():
+#    db.create_all()
+
+
 # --- Decorators ---
 def login_required(f):
     @wraps(f)
@@ -405,6 +410,7 @@ def delete_season(season_id):
 @login_required
 def get_user_history(habby_id):
     try:
+        # Busca todas as participações do usuário em temporadas, ordenadas da mais nova para a mais antiga
         participations = db.session.query(
             Season.id.label('season_id'), Season.start_date, Participant.fase,
             (Participant.r1 + Participant.r2 + Participant.r3).label('total'), Participant.name
@@ -413,29 +419,41 @@ def get_user_history(habby_id):
          .order_by(Season.start_date.desc()).all()
 
         if not participations:
-            return jsonify([]), 200
+            # Se não houver participações, retorna um objeto vazio
+            return jsonify({}), 200
 
-        history = []
+        history_list = []
         for i, current in enumerate(participations):
+            # Para cada participação, calcula a posição no ranking daquela temporada
             season_id = current.season_id
-            season_ranking = Participant.query.filter_by(season_id=season_id).order_by(Participant.fase.desc()).all()
+            season_ranking = db.session.query(Participant).filter_by(season_id=season_id)\
+                .order_by(Participant.fase.desc(), (Participant.r1 + Participant.r2 + Participant.r3).desc()).all()
+            
             position = next((idx + 1 for idx, p in enumerate(season_ranking) if p.habby_id == habby_id), None)
             
+            # Calcula a evolução em relação à temporada anterior
             evolution = '-'
             if i + 1 < len(participations):
                 previous = participations[i + 1]
                 if current.fase is not None and previous.fase is not None:
                     evolution = current.fase - previous.fase
             
-            history.append({
-                'season_id': season_id, 'start_date': current.start_date.strftime('%Y-%m-%d'),
-                'position': position, 'fase_acesso': current.fase, 'evolution': evolution
+            history_list.append({
+                'season_id': season_id,
+                'start_date': current.start_date.strftime('%Y-%m-%d'),
+                'position': position,
+                'fase_acesso': current.fase,
+                'evolution': evolution
             })
-
-        return jsonify(history), 200
+        
+        # --- ESTA É A CORREÇÃO PRINCIPAL ---
+        # Retorna apenas o primeiro item da lista (o mais recente) ou um objeto vazio.
+        return jsonify(history_list[0] if history_list else {}), 200
+        
     except Exception as e:
         print(f"Error fetching history for {habby_id}: {e}")
         return jsonify({'error': 'Erro ao buscar histórico.'}), 500
+    
 @app.route('/honor-members-management', methods=['GET'])
 @roles_required(['admin', 'leader'])
 def get_honor_management_list():

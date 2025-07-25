@@ -537,12 +537,27 @@ def get_latest_honor_members():
     if not latest_season:
         return jsonify({'members': [], 'period': 'Nenhuma temporada definida.'})
 
-    # AJUSTE: MUDOU DE .limit(3) para .limit(2)
-    top_members = HonorParticipant.query.filter_by(season_id=latest_season.id)\
-        .order_by(HonorParticipant.sort_order.asc()).limit(2).all()
+    # AJUSTE: A query agora busca também a foto do perfil
+    top_members_data = db.session.query(
+        HonorParticipant.name,
+        HonorParticipant.habby_id,
+        UserProfile.profile_pic_url
+    ).join(
+        UserProfile, UserProfile.habby_id == HonorParticipant.habby_id
+    ).filter(
+        HonorParticipant.season_id == latest_season.id
+    ).order_by(
+        HonorParticipant.sort_order.asc()
+    ).limit(2).all()
         
-    members = [{'name': p.name, 'habby_id': p.habby_id} for p in top_members]
+    members = [{
+        'name': p.name,
+        'habby_id': p.habby_id,
+        'profile_pic_url': p.profile_pic_url
+    } for p in top_members_data]
+    
     period = f"De: {latest_season.start_date.strftime('%d/%m/%Y')} a Até: {latest_season.end_date.strftime('%d/%m/%Y')}"
+    
     return jsonify({'members': members, 'period': period})
 
 # --- destaque para o membro de honra ---

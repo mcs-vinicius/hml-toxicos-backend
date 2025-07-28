@@ -15,7 +15,6 @@ import json
 app = Flask(__name__)
 
 # --- Configurações Iniciais ---
-# Define a origem do frontend para o CORS, com um fallback para desenvolvimento local.
 prod_origin = os.environ.get('FRONTEND_URL', 'https://hml-toxicos-frontend.vercel.app')
 CORS(
     app,
@@ -25,7 +24,6 @@ CORS(
     expose_headers=["Content-Type", "Authorization"]
 )
 
-# Configurações da aplicação Flask
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))
 app.config['SESSION_COOKIE_SAMESITE'] = 'None'
 app.config['SESSION_COOKIE_SECURE'] = True
@@ -153,6 +151,21 @@ def normalize_status(value):
     if isinstance(value, str) and value.strip().lower().startswith('s'):
         return 'Sim'
     return 'Não'
+    
+# --- Função Auxiliar de Conversão ---
+def model_to_dict(obj):
+    if obj is None:
+        return None
+    data = {}
+    for column in obj.__table__.columns:
+        value = getattr(obj, column.name)
+        if isinstance(value, (datetime, date)):
+            data[column.name] = value.isoformat()
+        elif isinstance(value, decimal.Decimal):
+            data[column.name] = str(value)
+        else:
+            data[column.name] = value
+    return data
 
 # --- ROTAS DE AUTENTICAÇÃO E USUÁRIO ---
 @app.route('/register-user', methods=['POST'])
@@ -307,7 +320,6 @@ def get_user_profile(habby_id):
     profile = UserProfile.query.filter_by(habby_id=habby_id).first()
     if not profile:
         return jsonify({'error': 'Perfil não encontrado.'}), 404
-    # Usa a função auxiliar para converter o objeto para dicionário
     return jsonify(model_to_dict(profile))
 
 @app.route('/profile', methods=['PUT'])
@@ -316,7 +328,6 @@ def update_user_profile():
     data = request.json
     logged_in_habby_id = session.get('habby_id')
 
-    # A verificação deve ser sobre o habby_id logado, não o do corpo da requisição
     profile = UserProfile.query.filter_by(habby_id=logged_in_habby_id).first()
     if not profile:
         return jsonify({'error': 'Perfil não encontrado.'}), 404
@@ -604,44 +615,20 @@ def update_home_content():
         db.session.rollback()
         return jsonify({'error': f'Erro ao atualizar conteúdo: {e}'}), 500
 
-# --- ROTAS DE BACKUP E RESTAURAÇÃO (VERSÃO CORRIGIDA E LIMPA) ---
-
-def model_to_dict(obj):
-    """
-    Converte um objeto SQLAlchemy em um dicionário, tratando tipos de dados
-    que não são serializáveis para JSON (como Decimal e Date).
-    """
-    if obj is None:
-        return None
-    
-    data = {}
-    for column in obj.__table__.columns:
-        value = getattr(obj, column.name)
-        
-        if isinstance(value, (datetime, date)):
-            data[column.name] = value.isoformat()
-        elif isinstance(value, decimal.Decimal):
-            data[column.name] = str(value)
-        else:
-            data[column.name] = value
-            
-    return data
+# --- ROTAS DE BACKUP E RESTAURAÇÃO (AJUSTADAS PARA MANTER SENHAS) ---
 
 @app.route('/backup', methods=['GET'])
 @roles_required(['admin'])
 def backup_data():
-    """Cria um backup completo de todas as tabelas em formato JSON."""
+    """Cria um backup completo, incluindo os hashes de senha dos usuários."""
     try:
-        users_list = []
-        for u in User.query.all():
-            user_dict = model_to_dict(u)
-            user_dict.pop('password', None) # Remove a senha do backup por segurança
-            users_list.append(user_dict)
+        # Pega os dados dos usuários, incluindo a senha com hash
+        users_list = [model_to_dict(u) for u in User.query.all()]
 
         participants_list = []
         for p in Participant.query.all():
             participant_dict = model_to_dict(p)
-            participant_dict['total'] = p.total # Adiciona o campo calculado 'total'
+            participant_dict['total'] = p.total
             participants_list.append(participant_dict)
 
         full_backup = {
@@ -663,7 +650,7 @@ def backup_data():
 @app.route('/restore', methods=['POST'])
 @roles_required(['admin'])
 def restore_data():
-    """Restaura o banco de dados a partir de um arquivo JSON."""
+    """Restaura o banco de dados, mantendo as senhas originais do backup."""
     if 'file' not in request.files:
         return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
 
@@ -674,7 +661,7 @@ def restore_data():
     try:
         data = json.load(file)
 
-        # Limpa as tabelas na ordem correta para evitar erros de chave estrangeira
+        # Limpa as tabelas na ordem correta
         db.session.query(HonorParticipant).delete()
         db.session.query(Participant).delete()
         db.session.query(UserProfile).delete()
@@ -686,24 +673,22 @@ def restore_data():
 
         # Inserir dados na ordem de dependência
         for user_data in data.get('users', []):
-            # Define uma senha padrão, pois a original não foi salva
-            user_data['password'] = generate_password_hash("senha_padrao_nova")
+            # A senha já vem com hash do backup, não precisa gerar uma nova
             db.session.add(User(**user_data))
 
         for profile_data in data.get('user_profiles', []):
             db.session.add(UserProfile(**profile_data))
 
-        db.session.commit() # Commit inicial para garantir que usuários e perfis existam
+        db.session.commit()
 
         for season_data in data.get('seasons', []):
             season_data['start_date'] = date.fromisoformat(season_data['start_date'])
             season_data['end_date'] = date.fromisoformat(season_data['end_date'])
-            # Remove a chave 'participants' se ela veio no dicionário
             season_data.pop('participants', None)
             db.session.add(Season(**season_data))
 
         for p_data in data.get('participants', []):
-            p_data.pop('total', None) # Remove 'total' pois não é uma coluna do DB
+            p_data.pop('total', None)
             db.session.add(Participant(**p_data))
 
         for hc_data in data.get('home_content', []):
@@ -720,7 +705,8 @@ def restore_data():
 
         db.session.commit()
 
-        return jsonify({'message': 'Restauração concluída! Senhas redefinidas para "senha_padrao_nova".'}), 200
+        # Altera a mensagem de sucesso para refletir que as senhas foram mantidas
+        return jsonify({'message': 'Restauração concluída com sucesso! As senhas originais dos usuários foram mantidas.'}), 200
 
     except IntegrityError as e:
         db.session.rollback()
@@ -750,9 +736,7 @@ def create_tables():
 
 if __name__ == '__main__':
     import sys
-    # Permite rodar 'python app.py init-db' para criar as tabelas
     if len(sys.argv) > 1 and sys.argv[1] == 'init-db':
         create_tables()
     else:
-        # Inicia o servidor web
         app.run(debug=True, port=int(os.environ.get('PORT', 5000)))

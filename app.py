@@ -6,12 +6,16 @@ from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
+import decimal
+import json
 
 app = Flask(__name__)
 
 # --- Configurações Iniciais ---
+# Define a origem do frontend para o CORS, com um fallback para desenvolvimento local.
 prod_origin = os.environ.get('FRONTEND_URL', 'https://hml-toxicos-frontend.vercel.app')
 CORS(
     app,
@@ -20,6 +24,8 @@ CORS(
     supports_credentials=True,
     expose_headers=["Content-Type", "Authorization"]
 )
+
+# Configurações da aplicação Flask
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))
 app.config['SESSION_COOKIE_SAMESITE'] = 'None'
 app.config['SESSION_COOKIE_SECURE'] = True
@@ -28,7 +34,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# --- Modelos do Banco de Dados (sem alterações) ---
+# --- Modelos do Banco de Dados ---
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -121,10 +127,6 @@ class HonorParticipant(db.Model):
     fase_ataque = db.Column(db.String(10), nullable=False)
     sort_order = db.Column(db.Integer, nullable=False)
 
-#with app.app_context():
-#    db.create_all()
-
-
 # --- Decorators ---
 def login_required(f):
     @wraps(f)
@@ -152,9 +154,7 @@ def normalize_status(value):
         return 'Sim'
     return 'Não'
 
-# --- Rotas de Usuário, Perfil, Temporada (sem alteração) ---
-# ... (todas as rotas desde /register-user até /history ficam aqui, inalteradas)
-# --- ROTAS DE HONRA (ATUALIZADAS) ---
+# --- ROTAS DE AUTENTICAÇÃO E USUÁRIO ---
 @app.route('/register-user', methods=['POST'])
 def register_user():
     data = request.json
@@ -226,6 +226,7 @@ def get_session():
         }), 200
     return jsonify({'isLoggedIn': False}), 200
 
+# --- ROTAS DE GERENCIAMENTO ---
 @app.route('/users', methods=['GET'])
 @roles_required(['admin', 'leader'])
 def get_users():
@@ -306,7 +307,8 @@ def get_user_profile(habby_id):
     profile = UserProfile.query.filter_by(habby_id=habby_id).first()
     if not profile:
         return jsonify({'error': 'Perfil não encontrado.'}), 404
-    return jsonify({c.name: getattr(profile, c.name) for c in profile.__table__.columns})
+    # Usa a função auxiliar para converter o objeto para dicionário
+    return jsonify(model_to_dict(profile))
 
 @app.route('/profile', methods=['PUT'])
 @login_required
@@ -314,9 +316,7 @@ def update_user_profile():
     data = request.json
     logged_in_habby_id = session.get('habby_id')
 
-    if data.get('habby_id') != logged_in_habby_id:
-        return jsonify({'error': 'Permissão negada para editar este perfil.'}), 403
-
+    # A verificação deve ser sobre o habby_id logado, não o do corpo da requisição
     profile = UserProfile.query.filter_by(habby_id=logged_in_habby_id).first()
     if not profile:
         return jsonify({'error': 'Perfil não encontrado.'}), 404
@@ -410,7 +410,6 @@ def delete_season(season_id):
 @login_required
 def get_user_history(habby_id):
     try:
-        # Busca todas as participações do usuário em temporadas, ordenadas da mais nova para a mais antiga
         participations = db.session.query(
             Season.id.label('season_id'), Season.start_date, Participant.fase,
             (Participant.r1 + Participant.r2 + Participant.r3).label('total'), Participant.name
@@ -419,19 +418,16 @@ def get_user_history(habby_id):
          .order_by(Season.start_date.desc()).all()
 
         if not participations:
-            # Se não houver participações, retorna um objeto vazio
             return jsonify({}), 200
 
         history_list = []
         for i, current in enumerate(participations):
-            # Para cada participação, calcula a posição no ranking daquela temporada
             season_id = current.season_id
             season_ranking = db.session.query(Participant).filter_by(season_id=season_id)\
                 .order_by(Participant.fase.desc(), (Participant.r1 + Participant.r2 + Participant.r3).desc()).all()
             
             position = next((idx + 1 for idx, p in enumerate(season_ranking) if p.habby_id == habby_id), None)
             
-            # Calcula a evolução em relação à temporada anterior
             evolution = '-'
             if i + 1 < len(participations):
                 previous = participations[i + 1]
@@ -446,14 +442,13 @@ def get_user_history(habby_id):
                 'evolution': evolution
             })
         
-        # --- ESTA É A CORREÇÃO PRINCIPAL ---
-        # Retorna apenas o primeiro item da lista (o mais recente) ou um objeto vazio.
         return jsonify(history_list[0] if history_list else {}), 200
         
     except Exception as e:
         print(f"Error fetching history for {habby_id}: {e}")
         return jsonify({'error': 'Erro ao buscar histórico.'}), 500
     
+# --- ROTAS DE HONRA ---
 @app.route('/honor-members-management', methods=['GET'])
 @roles_required(['admin', 'leader'])
 def get_honor_management_list():
@@ -516,7 +511,6 @@ def get_honor_seasons():
         })
     return jsonify(result)
 
-# ROTA NOVA: Excluir uma temporada de honra específica
 @app.route('/honor-seasons/<int:season_id>', methods=['DELETE'])
 @roles_required(['admin'])
 def delete_honor_season(season_id):
@@ -537,7 +531,6 @@ def get_latest_honor_members():
     if not latest_season:
         return jsonify({'members': [], 'period': 'Nenhuma temporada definida.'})
 
-    # AJUSTE: A query agora busca também a foto do perfil
     top_members_data = db.session.query(
         HonorParticipant.name,
         HonorParticipant.habby_id,
@@ -560,17 +553,13 @@ def get_latest_honor_members():
     
     return jsonify({'members': members, 'period': period})
 
-# --- destaque para o membro de honra ---
-
 @app.route('/honor-status/<string:habby_id>', methods=['GET'])
 def get_honor_status(habby_id):
-    """Verifica se um habby_id pertence aos Membros de Honra atuais."""
     latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
     
     if not latest_season:
         return jsonify({'is_honor_member': False})
 
-    # Busca os IDs dos 2 membros de honra atuais
     top_members_ids = [
         p.habby_id for p in HonorParticipant.query
         .filter_by(season_id=latest_season.id)
@@ -615,38 +604,27 @@ def update_home_content():
         db.session.rollback()
         return jsonify({'error': f'Erro ao atualizar conteúdo: {e}'}), 500
 
-# --- Função de Inicialização ---
-def create_tables():
-    with app.app_context():
-        print("Criando/Verificando todas as tabelas no banco de dados...")
-        db.create_all()
-        print("Tabelas prontas.")
-        if not HomeContent.query.get(1):
-            print("Inserindo conteúdo inicial da Home...")
-            default_content = HomeContent(
-                id=1, leader='Líder a definir', focus='Foco a definir',
-                league='Liga a definir', requirements='Requisito 1;Requisito 2',
-                content_section='Seção de conteúdo a definir.'
-            )
-            db.session.add(default_content)
-            db.session.commit()
-            print("Conteúdo inicial inserido.")
+# --- ROTAS DE BACKUP E RESTAURAÇÃO (VERSÃO CORRIGIDA E LIMPA) ---
 
-# --- ROTAS DE BACKUP E RESTAURAÇÃO (NOVAS) ---
-import json
-from sqlalchemy.exc import IntegrityError
-
-def dump_sqlalchemy_row(row):
-    """Converte uma linha do SQLAlchemy para um dicionário, tratando tipos de dados."""
+def model_to_dict(obj):
+    """
+    Converte um objeto SQLAlchemy em um dicionário, tratando tipos de dados
+    que não são serializáveis para JSON (como Decimal e Date).
+    """
+    if obj is None:
+        return None
+    
     data = {}
-    for column in row.__table__.columns:
-        value = getattr(row, column.name)
+    for column in obj.__table__.columns:
+        value = getattr(obj, column.name)
+        
         if isinstance(value, (datetime, date)):
             data[column.name] = value.isoformat()
-        elif isinstance(value, Decimal):
+        elif isinstance(value, decimal.Decimal):
             data[column.name] = str(value)
         else:
             data[column.name] = value
+            
     return data
 
 @app.route('/backup', methods=['GET'])
@@ -654,25 +632,33 @@ def dump_sqlalchemy_row(row):
 def backup_data():
     """Cria um backup completo de todas as tabelas em formato JSON."""
     try:
-        backup_data = {
-            'users': [dump_sqlalchemy_row(u) for u in User.query.all()],
-            'user_profiles': [dump_sqlalchemy_row(up) for up in UserProfile.query.all()],
-            'seasons': [dump_sqlalchemy_row(s) for s in Season.query.all()],
-            'participants': [dump_sqlalchemy_row(p) for p in Participant.query.all()],
-            'home_content': [dump_sqlalchemy_row(hc) for hc in HomeContent.query.all()],
-            'honor_seasons': [dump_sqlalchemy_row(hs) for hs in HonorSeason.query.all()],
-            'honor_participants': [dump_sqlalchemy_row(hp) for hp in HonorParticipant.query.all()],
+        users_list = []
+        for u in User.query.all():
+            user_dict = model_to_dict(u)
+            user_dict.pop('password', None) # Remove a senha do backup por segurança
+            users_list.append(user_dict)
+
+        participants_list = []
+        for p in Participant.query.all():
+            participant_dict = model_to_dict(p)
+            participant_dict['total'] = p.total # Adiciona o campo calculado 'total'
+            participants_list.append(participant_dict)
+
+        full_backup = {
+            'users': users_list,
+            'user_profiles': [model_to_dict(up) for up in UserProfile.query.all()],
+            'seasons': [model_to_dict(s) for s in Season.query.all()],
+            'participants': participants_list,
+            'home_content': [model_to_dict(hc) for hc in HomeContent.query.all()],
+            'honor_seasons': [model_to_dict(hs) for hs in HonorSeason.query.all()],
+            'honor_participants': [model_to_dict(hp) for hp in HonorParticipant.query.all()],
         }
         
-        # Omitindo senhas hasheadas do backup para maior segurança ao restaurar
-        for user in backup_data['users']:
-            user.pop('password', None)
-
-
-        return jsonify(backup_data)
+        return jsonify(full_backup)
 
     except Exception as e:
-        return jsonify({'error': f'Erro ao gerar backup: {e}'}), 500
+        print(f"[BACKUP ERROR]: {e}")
+        return jsonify({'error': 'Ocorreu um erro interno ao gerar o backup.', 'details': str(e)}), 500
 
 @app.route('/restore', methods=['POST'])
 @roles_required(['admin'])
@@ -688,7 +674,7 @@ def restore_data():
     try:
         data = json.load(file)
 
-        # Limpa as tabelas na ordem correta para evitar problemas de chave estrangeira
+        # Limpa as tabelas na ordem correta para evitar erros de chave estrangeira
         db.session.query(HonorParticipant).delete()
         db.session.query(Participant).delete()
         db.session.query(UserProfile).delete()
@@ -700,52 +686,73 @@ def restore_data():
 
         # Inserir dados na ordem de dependência
         for user_data in data.get('users', []):
+            # Define uma senha padrão, pois a original não foi salva
             user_data['password'] = generate_password_hash("senha_padrao_nova")
-            user = User(**user_data)
-            db.session.add(user)
+            db.session.add(User(**user_data))
 
         for profile_data in data.get('user_profiles', []):
-            profile = UserProfile(**profile_data)
-            db.session.add(profile)
+            db.session.add(UserProfile(**profile_data))
+
+        db.session.commit() # Commit inicial para garantir que usuários e perfis existam
 
         for season_data in data.get('seasons', []):
-            season_data['start_date'] = datetime.fromisoformat(season_data['start_date']).date()
-            season_data['end_date'] = datetime.fromisoformat(season_data['end_date']).date()
-            season = Season(**season_data)
-            db.session.add(season)
-        
+            season_data['start_date'] = date.fromisoformat(season_data['start_date'])
+            season_data['end_date'] = date.fromisoformat(season_data['end_date'])
+            # Remove a chave 'participants' se ela veio no dicionário
+            season_data.pop('participants', None)
+            db.session.add(Season(**season_data))
+
         for p_data in data.get('participants', []):
-            participant = Participant(**p_data)
-            db.session.add(participant)
-            
+            p_data.pop('total', None) # Remove 'total' pois não é uma coluna do DB
+            db.session.add(Participant(**p_data))
+
         for hc_data in data.get('home_content', []):
-            hc = HomeContent(**hc_data)
-            db.session.add(hc)
+            db.session.add(HomeContent(**hc_data))
 
         for hs_data in data.get('honor_seasons', []):
-            hs_data['start_date'] = datetime.fromisoformat(hs_data['start_date']).date()
-            hs_data['end_date'] = datetime.fromisoformat(hs_data['end_date']).date()
-            hs = HonorSeason(**hs_data)
-            db.session.add(hs)
+            hs_data['start_date'] = date.fromisoformat(hs_data['start_date'])
+            hs_data['end_date'] = date.fromisoformat(hs_data['end_date'])
+            hs_data.pop('participants', None)
+            db.session.add(HonorSeason(**hs_data))
             
         for hp_data in data.get('honor_participants', []):
-            hp = HonorParticipant(**hp_data)
-            db.session.add(hp)
+            db.session.add(HonorParticipant(**hp_data))
 
         db.session.commit()
 
-        return jsonify({'message': 'Restauração concluída com sucesso! Todas as senhas foram redefinidas para "senha_padrao_nova".'}), 200
+        return jsonify({'message': 'Restauração concluída! Senhas redefinidas para "senha_padrao_nova".'}), 200
 
     except IntegrityError as e:
         db.session.rollback()
-        return jsonify({'error': f'Erro de integridade durante a restauração: {e.orig}'}), 500
+        return jsonify({'error': f'Erro de integridade nos dados: {e.orig}'}), 500
     except Exception as e:
         db.session.rollback()
+        print(f"[RESTORE ERROR]: {e}")
         return jsonify({'error': f'Erro ao restaurar dados: {e}'}), 500
+
+# --- Função de Inicialização do Banco de Dados ---
+def create_tables():
+    with app.app_context():
+        print("Criando/Verificando todas as tabelas no banco de dados...")
+        db.create_all()
+        print("Tabelas prontas.")
+        
+        if not HomeContent.query.get(1):
+            print("Inserindo conteúdo inicial da Home...")
+            default_content = HomeContent(
+                id=1, leader='Líder a definir', focus='Foco a definir',
+                league='Liga a definir', requirements='Requisito 1;Requisito 2',
+                content_section='Seção de conteúdo a definir.'
+            )
+            db.session.add(default_content)
+            db.session.commit()
+            print("Conteúdo inicial inserido.")
 
 if __name__ == '__main__':
     import sys
+    # Permite rodar 'python app.py init-db' para criar as tabelas
     if len(sys.argv) > 1 and sys.argv[1] == 'init-db':
         create_tables()
     else:
+        # Inicia o servidor web
         app.run(debug=True, port=int(os.environ.get('PORT', 5000)))

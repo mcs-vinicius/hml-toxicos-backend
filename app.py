@@ -632,6 +632,117 @@ def create_tables():
             db.session.commit()
             print("Conteúdo inicial inserido.")
 
+# --- ROTAS DE BACKUP E RESTAURAÇÃO (NOVAS) ---
+import json
+from sqlalchemy.exc import IntegrityError
+
+def dump_sqlalchemy_row(row):
+    """Converte uma linha do SQLAlchemy para um dicionário, tratando tipos de dados."""
+    data = {}
+    for column in row.__table__.columns:
+        value = getattr(row, column.name)
+        if isinstance(value, (datetime, date)):
+            data[column.name] = value.isoformat()
+        elif isinstance(value, Decimal):
+            data[column.name] = str(value)
+        else:
+            data[column.name] = value
+    return data
+
+@app.route('/backup', methods=['GET'])
+@roles_required(['admin'])
+def backup_data():
+    """Cria um backup completo de todas as tabelas em formato JSON."""
+    try:
+        backup_data = {
+            'users': [dump_sqlalchemy_row(u) for u in User.query.all()],
+            'user_profiles': [dump_sqlalchemy_row(up) for up in UserProfile.query.all()],
+            'seasons': [dump_sqlalchemy_row(s) for s in Season.query.all()],
+            'participants': [dump_sqlalchemy_row(p) for p in Participant.query.all()],
+            'home_content': [dump_sqlalchemy_row(hc) for hc in HomeContent.query.all()],
+            'honor_seasons': [dump_sqlalchemy_row(hs) for hs in HonorSeason.query.all()],
+            'honor_participants': [dump_sqlalchemy_row(hp) for hp in HonorParticipant.query.all()],
+        }
+        
+        # Omitindo senhas hasheadas do backup para maior segurança ao restaurar
+        for user in backup_data['users']:
+            user.pop('password', None)
+
+
+        return jsonify(backup_data)
+
+    except Exception as e:
+        return jsonify({'error': f'Erro ao gerar backup: {e}'}), 500
+
+@app.route('/restore', methods=['POST'])
+@roles_required(['admin'])
+def restore_data():
+    """Restaura o banco de dados a partir de um arquivo JSON."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'Nenhum arquivo selecionado.'}), 400
+
+    try:
+        data = json.load(file)
+
+        # Limpa as tabelas na ordem correta para evitar problemas de chave estrangeira
+        db.session.query(HonorParticipant).delete()
+        db.session.query(Participant).delete()
+        db.session.query(UserProfile).delete()
+        db.session.query(User).delete()
+        db.session.query(HonorSeason).delete()
+        db.session.query(Season).delete()
+        db.session.query(HomeContent).delete()
+        db.session.commit()
+
+        # Inserir dados na ordem de dependência
+        for user_data in data.get('users', []):
+            user_data['password'] = generate_password_hash("senha_padrao_nova")
+            user = User(**user_data)
+            db.session.add(user)
+
+        for profile_data in data.get('user_profiles', []):
+            profile = UserProfile(**profile_data)
+            db.session.add(profile)
+
+        for season_data in data.get('seasons', []):
+            season_data['start_date'] = datetime.fromisoformat(season_data['start_date']).date()
+            season_data['end_date'] = datetime.fromisoformat(season_data['end_date']).date()
+            season = Season(**season_data)
+            db.session.add(season)
+        
+        for p_data in data.get('participants', []):
+            participant = Participant(**p_data)
+            db.session.add(participant)
+            
+        for hc_data in data.get('home_content', []):
+            hc = HomeContent(**hc_data)
+            db.session.add(hc)
+
+        for hs_data in data.get('honor_seasons', []):
+            hs_data['start_date'] = datetime.fromisoformat(hs_data['start_date']).date()
+            hs_data['end_date'] = datetime.fromisoformat(hs_data['end_date']).date()
+            hs = HonorSeason(**hs_data)
+            db.session.add(hs)
+            
+        for hp_data in data.get('honor_participants', []):
+            hp = HonorParticipant(**hp_data)
+            db.session.add(hp)
+
+        db.session.commit()
+
+        return jsonify({'message': 'Restauração concluída com sucesso! Todas as senhas foram redefinidas para "senha_padrao_nova".'}), 200
+
+    except IntegrityError as e:
+        db.session.rollback()
+        return jsonify({'error': f'Erro de integridade durante a restauração: {e.orig}'}), 500
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Erro ao restaurar dados: {e}'}), 500
+
 if __name__ == '__main__':
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == 'init-db':

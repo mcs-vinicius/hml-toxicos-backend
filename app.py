@@ -11,6 +11,8 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 import decimal
 import json
+import secrets  # Módulo para gerar senhas seguras
+import string   # Módulo para strings
 
 app = Flask(__name__)
 
@@ -32,7 +34,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# --- Modelos do Banco de Dados ---
+# --- Modelos do Banco de Dados (sem alterações) ---
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -146,13 +148,12 @@ def roles_required(allowed_roles):
         return decorated_function
     return wrapper
 
-# --- Função Auxiliar para Normalização ---
+# --- Funções Auxiliares ---
 def normalize_status(value):
     if isinstance(value, str) and value.strip().lower().startswith('s'):
         return 'Sim'
     return 'Não'
     
-# --- Função Auxiliar de Conversão ---
 def model_to_dict(obj):
     if obj is None:
         return None
@@ -168,6 +169,7 @@ def model_to_dict(obj):
     return data
 
 # --- ROTAS DE AUTENTICAÇÃO E USUÁRIO ---
+# (As rotas /register-user, /login, /logout, /session permanecem iguais)
 @app.route('/register-user', methods=['POST'])
 def register_user():
     data = request.json
@@ -301,7 +303,42 @@ def delete_user(user_id):
         db.session.rollback()
         return jsonify({'error': f'Erro ao excluir usuário: {e}'}), 500
 
-# --- Rotas de Perfil e Busca ---
+# NOVA ROTA: Redefinir senha pelo administrador
+@app.route('/users/<int:user_id>/reset-password', methods=['POST'])
+@roles_required(['admin'])
+def reset_password(user_id):
+    """
+    Gera uma nova senha temporária para um usuário e a retorna para o admin.
+    """
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'Usuário não encontrado.'}), 404
+
+    # Impede que um admin redefina a senha de outro admin (opcional, mas recomendado)
+    if user.role == 'admin' and session.get('user_id') != user.id:
+        return jsonify({'error': 'Não é permitido redefinir a senha de outro administrador.'}), 403
+
+    try:
+        # Gera uma senha temporária segura de 10 caracteres
+        alphabet = string.ascii_letters + string.digits
+        temp_password = ''.join(secrets.choice(alphabet) for i in range(10))
+
+        # Atualiza a senha no banco de dados
+        user.password = generate_password_hash(temp_password)
+        db.session.commit()
+
+        # Retorna a senha temporária em texto plano para o admin
+        return jsonify({
+            'message': f'Senha para o usuário {user.username} redefinida com sucesso!',
+            'temporary_password': temp_password
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[RESET PASSWORD ERROR]: {e}")
+        return jsonify({'error': f'Erro ao redefinir a senha: {e}'}), 500
+
+# --- Rotas de Perfil e Busca (sem alterações) ---
 @app.route('/search-users', methods=['GET'])
 @login_required
 def search_users():
@@ -332,6 +369,7 @@ def update_user_profile():
     if not profile:
         return jsonify({'error': 'Perfil não encontrado.'}), 404
 
+    # Lista de campos que o usuário pode atualizar em seu próprio perfil
     updatable_fields = [
         'nick', 'profile_pic_url', 'atk', 'hp', 'survivor_base_atk', 'survivor_base_hp',
         'survivor_bonus_atk', 'survivor_bonus_hp', 'survivor_final_atk', 'survivor_final_hp',
@@ -343,6 +381,12 @@ def update_user_profile():
         'collect_weak_targets', 'collect_frozen_targets'
     ]
     
+    # Se uma nova senha for fornecida, atualize-a
+    if 'new_password' in data and data['new_password']:
+        user_to_update = User.query.filter_by(habby_id=logged_in_habby_id).first()
+        if user_to_update:
+            user_to_update.password = generate_password_hash(data['new_password'])
+
     for field in updatable_fields:
         if field in data:
             setattr(profile, field, data[field])
@@ -354,7 +398,8 @@ def update_user_profile():
         db.session.rollback()
         return jsonify({'error': f'Erro ao atualizar perfil: {e}'}), 500
 
-# --- Rotas de Temporada (Ranking) ---
+# --- Rotas de Temporada e Honra (sem alterações) ---
+# (As rotas de /seasons, /history, /honor-seasons, etc. permanecem iguais)
 @app.route('/seasons', methods=['GET'])
 def get_seasons():
     seasons = Season.query.order_by(Season.start_date.asc()).all()
@@ -615,14 +660,13 @@ def update_home_content():
         db.session.rollback()
         return jsonify({'error': f'Erro ao atualizar conteúdo: {e}'}), 500
 
-# --- ROTAS DE BACKUP E RESTAURAÇÃO (AJUSTADAS PARA MANTER SENHAS) ---
 
+# --- ROTAS DE BACKUP E RESTAURAÇÃO (sem alterações) ---
 @app.route('/backup', methods=['GET'])
 @roles_required(['admin'])
 def backup_data():
     """Cria um backup completo, incluindo os hashes de senha dos usuários."""
     try:
-        # Pega os dados dos usuários, incluindo a senha com hash
         users_list = [model_to_dict(u) for u in User.query.all()]
 
         participants_list = []
@@ -661,7 +705,6 @@ def restore_data():
     try:
         data = json.load(file)
 
-        # Limpa as tabelas na ordem correta
         db.session.query(HonorParticipant).delete()
         db.session.query(Participant).delete()
         db.session.query(UserProfile).delete()
@@ -671,9 +714,7 @@ def restore_data():
         db.session.query(HomeContent).delete()
         db.session.commit()
 
-        # Inserir dados na ordem de dependência
         for user_data in data.get('users', []):
-            # A senha já vem com hash do backup, não precisa gerar uma nova
             db.session.add(User(**user_data))
 
         for profile_data in data.get('user_profiles', []):
@@ -705,7 +746,6 @@ def restore_data():
 
         db.session.commit()
 
-        # Altera a mensagem de sucesso para refletir que as senhas foram mantidas
         return jsonify({'message': 'Restauração concluída com sucesso! As senhas originais dos usuários foram mantidas.'}), 200
 
     except IntegrityError as e:
@@ -715,6 +755,7 @@ def restore_data():
         db.session.rollback()
         print(f"[RESTORE ERROR]: {e}")
         return jsonify({'error': f'Erro ao restaurar dados: {e}'}), 500
+
 
 # --- Função de Inicialização do Banco de Dados ---
 def create_tables():

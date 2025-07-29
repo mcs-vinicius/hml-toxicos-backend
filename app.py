@@ -587,11 +587,12 @@ def get_latest_honor_members():
     if not latest_season:
         return jsonify({'members': [], 'period': 'Nenhuma temporada definida.'})
 
+    # Use outerjoin to include honor members even if they don't have a user profile
     top_members_data = db.session.query(
         HonorParticipant.name,
         HonorParticipant.habby_id,
         UserProfile.profile_pic_url
-    ).join(
+    ).outerjoin(
         UserProfile, UserProfile.habby_id == HonorParticipant.habby_id
     ).filter(
         HonorParticipant.season_id == latest_season.id
@@ -602,7 +603,8 @@ def get_latest_honor_members():
     members = [{
         'name': p.name,
         'habby_id': p.habby_id,
-        'profile_pic_url': p.profile_pic_url
+        # Provide a default image if the user has no profile
+        'profile_pic_url': p.profile_pic_url or "https://ik.imagekit.io/wzl99vhez/toxicos/indefinido.png?updatedAt=1750707356953"
     } for p in top_members_data]
     
     period = f"De: {latest_season.start_date.strftime('%d/%m/%Y')} a Até: {latest_season.end_date.strftime('%d/%m/%Y')}"

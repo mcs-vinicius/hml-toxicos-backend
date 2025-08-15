@@ -11,8 +11,8 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 import decimal
 import json
-import secrets  # Módulo para gerar senhas seguras
-import string   # Módulo para strings
+import secrets
+import string
 
 app = Flask(__name__)
 
@@ -34,7 +34,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# --- Modelos do Banco de Dados (sem alterações) ---
+# --- Modelos do Banco de Dados ---
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -127,6 +127,16 @@ class HonorParticipant(db.Model):
     fase_ataque = db.Column(db.String(10), nullable=False)
     sort_order = db.Column(db.Integer, nullable=False)
 
+# <<< NOVO: Modelo para o Jogo da Cobrinha >>>
+class SnakeScore(db.Model):
+    __tablename__ = 'snake_scores'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    username = db.Column(db.String(255), nullable=False)
+    score = db.Column(db.Integer, nullable=False)
+    difficulty = db.Column(db.String(50), nullable=False)
+    created_at = db.Column(db.TIMESTAMP, server_default=db.func.now())
+
 # --- Decorators ---
 def login_required(f):
     @wraps(f)
@@ -169,7 +179,6 @@ def model_to_dict(obj):
     return data
 
 # --- ROTAS DE AUTENTICAÇÃO E USUÁRIO ---
-# (As rotas /register-user, /login, /logout, /session permanecem iguais)
 @app.route('/register-user', methods=['POST'])
 def register_user():
     data = request.json
@@ -303,42 +312,30 @@ def delete_user(user_id):
         db.session.rollback()
         return jsonify({'error': f'Erro ao excluir usuário: {e}'}), 500
 
-# NOVA ROTA: Redefinir senha pelo administrador
 @app.route('/users/<int:user_id>/reset-password', methods=['POST'])
 @roles_required(['admin'])
 def reset_password(user_id):
-    """
-    Gera uma nova senha temporária para um usuário e a retorna para o admin.
-    """
     user = User.query.get(user_id)
     if not user:
         return jsonify({'error': 'Usuário não encontrado.'}), 404
 
-    # Impede que um admin redefina a senha de outro admin (opcional, mas recomendado)
     if user.role == 'admin' and session.get('user_id') != user.id:
         return jsonify({'error': 'Não é permitido redefinir a senha de outro administrador.'}), 403
 
     try:
-        # Gera uma senha temporária segura de 10 caracteres
         alphabet = string.ascii_letters + string.digits
         temp_password = ''.join(secrets.choice(alphabet) for i in range(10))
-
-        # Atualiza a senha no banco de dados
         user.password = generate_password_hash(temp_password)
         db.session.commit()
-
-        # Retorna a senha temporária em texto plano para o admin
         return jsonify({
             'message': f'Senha para o usuário {user.username} redefinida com sucesso!',
             'temporary_password': temp_password
         }), 200
-        
     except Exception as e:
         db.session.rollback()
-        print(f"[RESET PASSWORD ERROR]: {e}")
         return jsonify({'error': f'Erro ao redefinir a senha: {e}'}), 500
 
-# --- Rotas de Perfil e Busca (sem alterações) ---
+# --- Rotas de Perfil e Busca ---
 @app.route('/search-users', methods=['GET'])
 @login_required
 def search_users():
@@ -369,7 +366,6 @@ def update_user_profile():
     if not profile:
         return jsonify({'error': 'Perfil não encontrado.'}), 404
 
-    # Lista de campos que o usuário pode atualizar em seu próprio perfil
     updatable_fields = [
         'nick', 'profile_pic_url', 'atk', 'hp', 'survivor_base_atk', 'survivor_base_hp',
         'survivor_bonus_atk', 'survivor_bonus_hp', 'survivor_final_atk', 'survivor_final_hp',
@@ -381,7 +377,6 @@ def update_user_profile():
         'collect_weak_targets', 'collect_frozen_targets'
     ]
     
-    # Se uma nova senha for fornecida, atualize-a
     if 'new_password' in data and data['new_password']:
         user_to_update = User.query.filter_by(habby_id=logged_in_habby_id).first()
         if user_to_update:
@@ -398,8 +393,7 @@ def update_user_profile():
         db.session.rollback()
         return jsonify({'error': f'Erro ao atualizar perfil: {e}'}), 500
 
-# --- Rotas de Temporada e Honra (sem alterações) ---
-# (As rotas de /seasons, /history, /honor-seasons, etc. permanecem iguais)
+# --- Rotas de Temporada e Honra ---
 @app.route('/seasons', methods=['GET'])
 def get_seasons():
     seasons = Season.query.order_by(Season.start_date.asc()).all()
@@ -501,7 +495,6 @@ def get_user_history(habby_id):
         return jsonify(history_list[0] if history_list else {}), 200
         
     except Exception as e:
-        print(f"Error fetching history for {habby_id}: {e}")
         return jsonify({'error': 'Erro ao buscar histórico.'}), 500
     
 # --- ROTAS DE HONRA ---
@@ -587,7 +580,6 @@ def get_latest_honor_members():
     if not latest_season:
         return jsonify({'members': [], 'period': 'Nenhuma temporada definida.'})
 
-    # Use outerjoin to include honor members even if they don't have a user profile
     top_members_data = db.session.query(
         HonorParticipant.name,
         HonorParticipant.habby_id,
@@ -603,7 +595,6 @@ def get_latest_honor_members():
     members = [{
         'name': p.name,
         'habby_id': p.habby_id,
-        # Provide a default image if the user has no profile
         'profile_pic_url': p.profile_pic_url or "https://ik.imagekit.io/wzl99vhez/toxicos/indefinido.png?updatedAt=1750707356953"
     } for p in top_members_data]
     
@@ -663,14 +654,54 @@ def update_home_content():
         return jsonify({'error': f'Erro ao atualizar conteúdo: {e}'}), 500
 
 
-# --- ROTAS DE BACKUP E RESTAURAÇÃO (sem alterações) ---
+# <<< NOVAS ROTAS PARA O JOGO DA COBRINHA >>>
+@app.route('/snake-scores', methods=['GET'])
+def get_snake_scores():
+    """Busca os 10 melhores scores para o ranking."""
+    try:
+        scores = SnakeScore.query.order_by(SnakeScore.score.desc()).limit(10).all()
+        return jsonify([{'username': s.username, 'score': s.score, 'difficulty': s.difficulty} for s in scores])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/snake-scores', methods=['POST'])
+@login_required
+def add_snake_score():
+    """Salva a pontuação de um usuário logado."""
+    data = request.get_json()
+    username = data.get('username')
+    score = data.get('score')
+    difficulty = data.get('difficulty')
+
+    if not all([username, score is not None, difficulty]):
+        return jsonify({'error': 'Dados incompletos'}), 400
+
+    # Validação para garantir que o usuário logado está salvando sua própria pontuação
+    user = User.query.filter_by(username=username).first()
+    if not user or user.id != session.get('user_id'):
+        return jsonify({'error': 'Usuário inválido ou não corresponde à sessão.'}), 403
+
+    try:
+        new_score = SnakeScore(
+            user_id=user.id,
+            username=user.username,
+            score=score,
+            difficulty=difficulty
+        )
+        db.session.add(new_score)
+        db.session.commit()
+        return jsonify({'message': 'Pontuação salva com sucesso!'}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Erro ao salvar pontuação: {e}'}), 500
+
+
+# --- ROTAS DE BACKUP E RESTAURAÇÃO ---
 @app.route('/backup', methods=['GET'])
 @roles_required(['admin'])
 def backup_data():
-    """Cria um backup completo, incluindo os hashes de senha dos usuários."""
     try:
         users_list = [model_to_dict(u) for u in User.query.all()]
-
         participants_list = []
         for p in Participant.query.all():
             participant_dict = model_to_dict(p)
@@ -685,18 +716,17 @@ def backup_data():
             'home_content': [model_to_dict(hc) for hc in HomeContent.query.all()],
             'honor_seasons': [model_to_dict(hs) for hs in HonorSeason.query.all()],
             'honor_participants': [model_to_dict(hp) for hp in HonorParticipant.query.all()],
+            # <<< NOVO: Adiciona os scores do jogo ao backup >>>
+            'snake_scores': [model_to_dict(ss) for ss in SnakeScore.query.all()],
         }
         
         return jsonify(full_backup)
-
     except Exception as e:
-        print(f"[BACKUP ERROR]: {e}")
         return jsonify({'error': 'Ocorreu um erro interno ao gerar o backup.', 'details': str(e)}), 500
 
 @app.route('/restore', methods=['POST'])
 @roles_required(['admin'])
 def restore_data():
-    """Restaura o banco de dados, mantendo as senhas originais do backup."""
     if 'file' not in request.files:
         return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
 
@@ -707,6 +737,9 @@ def restore_data():
     try:
         data = json.load(file)
 
+        # <<< NOVO: Limpa a tabela de scores do jogo >>>
+        db.session.query(SnakeScore).delete()
+        
         db.session.query(HonorParticipant).delete()
         db.session.query(Participant).delete()
         db.session.query(UserProfile).delete()
@@ -721,7 +754,6 @@ def restore_data():
 
         for profile_data in data.get('user_profiles', []):
             db.session.add(UserProfile(**profile_data))
-
         db.session.commit()
 
         for season_data in data.get('seasons', []):
@@ -745,19 +777,22 @@ def restore_data():
             
         for hp_data in data.get('honor_participants', []):
             db.session.add(HonorParticipant(**hp_data))
+            
+        # <<< NOVO: Restaura os scores do jogo >>>
+        for ss_data in data.get('snake_scores', []):
+            if ss_data.get('created_at'):
+                 ss_data['created_at'] = datetime.fromisoformat(ss_data['created_at'])
+            db.session.add(SnakeScore(**ss_data))
 
         db.session.commit()
-
-        return jsonify({'message': 'Restauração concluída com sucesso! As senhas originais dos usuários foram mantidas.'}), 200
+        return jsonify({'message': 'Restauração concluída com sucesso!'}), 200
 
     except IntegrityError as e:
         db.session.rollback()
         return jsonify({'error': f'Erro de integridade nos dados: {e.orig}'}), 500
     except Exception as e:
         db.session.rollback()
-        print(f"[RESTORE ERROR]: {e}")
         return jsonify({'error': f'Erro ao restaurar dados: {e}'}), 500
-
 
 # --- Função de Inicialização do Banco de Dados ---
 def create_tables():

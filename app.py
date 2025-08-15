@@ -127,7 +127,7 @@ class HonorParticipant(db.Model):
     fase_ataque = db.Column(db.String(10), nullable=False)
     sort_order = db.Column(db.Integer, nullable=False)
 
-# <<< NOVO: Modelo para o Jogo da Cobrinha >>>
+# <<< NOVO MODELO PARA O JOGO DA COBRINHA >>>
 class SnakeScore(db.Model):
     __tablename__ = 'snake_scores'
     id = db.Column(db.Integer, primary_key=True)
@@ -136,6 +136,8 @@ class SnakeScore(db.Model):
     score = db.Column(db.Integer, nullable=False)
     difficulty = db.Column(db.String(50), nullable=False)
     created_at = db.Column(db.TIMESTAMP, server_default=db.func.now())
+    # NOVO CAMPO para registrar a vitória
+    completed_game = db.Column(db.Boolean, default=False)
 
 # --- Decorators ---
 def login_required(f):
@@ -221,12 +223,7 @@ def login():
         session['habby_id'] = user.habby_id
         return jsonify({
             'message': 'Login bem-sucedido!',
-            'user': {
-                'id': user.id,
-                'username': user.username,
-                'role': user.role,
-                'habby_id': user.habby_id
-            }
+            'user': { 'id': user.id, 'username': user.username, 'role': user.role, 'habby_id': user.habby_id }
         }), 200
     else:
         return jsonify({'error': 'Credenciais inválidas'}), 401
@@ -241,12 +238,7 @@ def get_session():
     if 'user_id' in session:
         return jsonify({
             'isLoggedIn': True,
-            'user': {
-                'id': session['user_id'],
-                'username': session['username'],
-                'role': session.get('role'),
-                'habby_id': session.get('habby_id')
-            }
+            'user': { 'id': session['user_id'], 'username': session['username'], 'role': session.get('role'), 'habby_id': session.get('habby_id') }
         }), 200
     return jsonify({'isLoggedIn': False}), 200
 
@@ -258,10 +250,7 @@ def get_users():
         User.id, User.username, User.role, UserProfile.habby_id, UserProfile.nick, UserProfile.profile_pic_url
     ).join(UserProfile, User.id == UserProfile.user_id).order_by(User.role, User.username).all()
     
-    users = [{
-        'id': u.id, 'username': u.username, 'role': u.role, 'habby_id': u.habby_id,
-        'nick': u.nick, 'profile_pic_url': u.profile_pic_url
-    } for u in users_data]
+    users = [{'id': u.id, 'username': u.username, 'role': u.role, 'habby_id': u.habby_id, 'nick': u.nick, 'profile_pic_url': u.profile_pic_url} for u in users_data]
     return jsonify(users), 200
 
 @app.route('/users/<int:user_id>/role', methods=['PUT'])
@@ -270,15 +259,11 @@ def update_user_role(user_id):
     data = request.json
     new_role = data.get('role')
 
-    if new_role not in ['member', 'leader']:
-        return jsonify({'error': 'Role inválida.'}), 400
-
-    if session.get('user_id') == user_id:
-        return jsonify({'error': 'O administrador não pode alterar seu próprio nível.'}), 403
+    if new_role not in ['member', 'leader']: return jsonify({'error': 'Role inválida.'}), 400
+    if session.get('user_id') == user_id: return jsonify({'error': 'O administrador não pode alterar seu próprio nível.'}), 403
 
     user = User.query.get(user_id)
-    if not user:
-        return jsonify({'error': 'Usuário não encontrado.'}), 404
+    if not user: return jsonify({'error': 'Usuário não encontrado.'}), 404
 
     try:
         user.role = new_role
@@ -294,12 +279,10 @@ def delete_user(user_id):
     logged_in_user_role = session.get('role')
     logged_in_user_id = session.get('user_id')
 
-    if user_id == logged_in_user_id:
-        return jsonify({'error': 'Você não pode excluir a si mesmo.'}), 403
+    if user_id == logged_in_user_id: return jsonify({'error': 'Você não pode excluir a si mesmo.'}), 403
 
     user_to_delete = User.query.get(user_id)
-    if not user_to_delete:
-        return jsonify({'error': 'Usuário não encontrado.'}), 404
+    if not user_to_delete: return jsonify({'error': 'Usuário não encontrado.'}), 404
 
     if logged_in_user_role == 'leader' and user_to_delete.role in ['leader', 'admin']:
         return jsonify({'error': 'Líderes só podem excluir membros.'}), 403
@@ -316,44 +299,34 @@ def delete_user(user_id):
 @roles_required(['admin'])
 def reset_password(user_id):
     user = User.query.get(user_id)
-    if not user:
-        return jsonify({'error': 'Usuário não encontrado.'}), 404
-
-    if user.role == 'admin' and session.get('user_id') != user.id:
-        return jsonify({'error': 'Não é permitido redefinir a senha de outro administrador.'}), 403
+    if not user: return jsonify({'error': 'Usuário não encontrado.'}), 404
+    if user.role == 'admin' and session.get('user_id') != user.id: return jsonify({'error': 'Não é permitido redefinir a senha de outro administrador.'}), 403
 
     try:
         alphabet = string.ascii_letters + string.digits
         temp_password = ''.join(secrets.choice(alphabet) for i in range(10))
         user.password = generate_password_hash(temp_password)
         db.session.commit()
-        return jsonify({
-            'message': f'Senha para o usuário {user.username} redefinida com sucesso!',
-            'temporary_password': temp_password
-        }), 200
+        return jsonify({'message': f'Senha para o usuário {user.username} redefinida com sucesso!', 'temporary_password': temp_password}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Erro ao redefinir a senha: {e}'}), 500
 
-# --- Rotas de Perfil e Busca ---
+# --- ROTAS DE PERFIL E BUSCA ---
 @app.route('/search-users', methods=['GET'])
 @login_required
 def search_users():
     query = request.args.get('query', '')
-    if len(query) < 2:
-        return jsonify([])
+    if len(query) < 2: return jsonify([])
     search_query = f"%{query}%"
-    users = UserProfile.query.filter(
-        or_(UserProfile.nick.ilike(search_query), UserProfile.habby_id.ilike(search_query))
-    ).limit(10).all()
+    users = UserProfile.query.filter(or_(UserProfile.nick.ilike(search_query), UserProfile.habby_id.ilike(search_query))).limit(10).all()
     return jsonify([{'habby_id': u.habby_id, 'nick': u.nick} for u in users])
 
 @app.route('/profile/<string:habby_id>', methods=['GET'])
 @login_required
 def get_user_profile(habby_id):
     profile = UserProfile.query.filter_by(habby_id=habby_id).first()
-    if not profile:
-        return jsonify({'error': 'Perfil não encontrado.'}), 404
+    if not profile: return jsonify({'error': 'Perfil não encontrado.'}), 404
     return jsonify(model_to_dict(profile))
 
 @app.route('/profile', methods=['PUT'])
@@ -361,21 +334,10 @@ def get_user_profile(habby_id):
 def update_user_profile():
     data = request.json
     logged_in_habby_id = session.get('habby_id')
-
     profile = UserProfile.query.filter_by(habby_id=logged_in_habby_id).first()
-    if not profile:
-        return jsonify({'error': 'Perfil não encontrado.'}), 404
+    if not profile: return jsonify({'error': 'Perfil não encontrado.'}), 404
 
-    updatable_fields = [
-        'nick', 'profile_pic_url', 'atk', 'hp', 'survivor_base_atk', 'survivor_base_hp',
-        'survivor_bonus_atk', 'survivor_bonus_hp', 'survivor_final_atk', 'survivor_final_hp',
-        'survivor_crit_rate', 'survivor_crit_damage', 'survivor_skill_damage',
-        'survivor_shield_boost', 'survivor_poison_targets', 'survivor_weak_targets',
-        'survivor_frozen_targets', 'pet_base_atk', 'pet_base_hp', 'pet_crit_damage',
-        'pet_skill_damage', 'collect_final_atk', 'collect_final_hp', 'collect_crit_rate',
-        'collect_crit_damage', 'collect_skill_damage', 'collect_poison_targets',
-        'collect_weak_targets', 'collect_frozen_targets'
-    ]
+    updatable_fields = [ 'nick', 'profile_pic_url', 'atk', 'hp', 'survivor_base_atk', 'survivor_base_hp', 'survivor_bonus_atk', 'survivor_bonus_hp', 'survivor_final_atk', 'survivor_final_hp', 'survivor_crit_rate', 'survivor_crit_damage', 'survivor_skill_damage', 'survivor_shield_boost', 'survivor_poison_targets', 'survivor_weak_targets', 'survivor_frozen_targets', 'pet_base_atk', 'pet_base_hp', 'pet_crit_damage', 'pet_skill_damage', 'collect_final_atk', 'collect_final_hp', 'collect_crit_rate', 'collect_crit_damage', 'collect_skill_damage', 'collect_poison_targets', 'collect_weak_targets', 'collect_frozen_targets' ]
     
     if 'new_password' in data and data['new_password']:
         user_to_update = User.query.filter_by(habby_id=logged_in_habby_id).first()
@@ -393,352 +355,207 @@ def update_user_profile():
         db.session.rollback()
         return jsonify({'error': f'Erro ao atualizar perfil: {e}'}), 500
 
-# --- Rotas de Temporada e Honra ---
+# --- ROTAS DE TEMPORADA E HONRA ---
 @app.route('/seasons', methods=['GET'])
 def get_seasons():
     seasons = Season.query.order_by(Season.start_date.asc()).all()
     result = []
     for s in seasons:
-        participants_data = [{
-            'id': p.id, 'habby_id': p.habby_id, 'name': p.name, 'fase': p.fase,
-            'r1': p.r1, 'r2': p.r2, 'r3': p.r3, 'total': p.total
-        } for p in s.participants]
-        result.append({
-            'id': s.id, 'start_date': s.start_date.isoformat(),
-            'end_date': s.end_date.isoformat(), 'participants': participants_data
-        })
+        participants_data = [{'id': p.id, 'habby_id': p.habby_id, 'name': p.name, 'fase': p.fase, 'r1': p.r1, 'r2': p.r2, 'r3': p.r3, 'total': p.total} for p in s.participants]
+        result.append({'id': s.id, 'start_date': s.start_date.isoformat(), 'end_date': s.end_date.isoformat(), 'participants': participants_data})
     return jsonify(result)
 
 @app.route('/seasons', methods=['POST'])
 @roles_required(['admin', 'leader'])
 def create_season():
     data = request.json
-    start_date_str = data.get('startDate')
-    end_date_str = data.get('endDate')
-    participants_data = data.get('participants', [])
-
-    if not start_date_str or not end_date_str:
-        return jsonify({'error': 'Data de início e fim obrigatórias'}), 400
+    start_date_str, end_date_str, participants_data = data.get('startDate'), data.get('endDate'), data.get('participants', [])
+    if not start_date_str or not end_date_str: return jsonify({'error': 'Data de início e fim obrigatórias'}), 400
 
     try:
-        start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
-        end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-        new_season = Season(start_date=start_date, end_date=end_date)
-        db.session.add(new_season)
-        db.session.flush()
-
+        new_season = Season(start_date=datetime.strptime(start_date_str, '%Y-%m-%d').date(), end_date=datetime.strptime(end_date_str, '%Y-%m-%d').date())
+        db.session.add(new_season); db.session.flush()
         for p_data in participants_data:
-            new_participant = Participant(
-                season_id=new_season.id, habby_id=p_data.get('habby_id'),
-                name=p_data['name'], fase=p_data['fase'], r1=p_data['r1'],
-                r2=p_data['r2'], r3=p_data['r3']
-            )
-            db.session.add(new_participant)
-        
+            db.session.add(Participant(season_id=new_season.id, habby_id=p_data.get('habby_id'), name=p_data['name'], fase=p_data['fase'], r1=p_data['r1'], r2=p_data['r2'], r3=p_data['r3']))
         db.session.commit()
         return jsonify({'message': 'Temporada criada com sucesso!', 'seasonId': new_season.id}), 201
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'Erro ao criar temporada: {e}'}), 500
+        db.session.rollback(); return jsonify({'error': f'Erro ao criar temporada: {e}'}), 500
 
 @app.route('/seasons/<int:season_id>', methods=['DELETE'])
 @roles_required(['admin'])
 def delete_season(season_id):
-    season_to_delete = Season.query.get(season_id)
-    if not season_to_delete:
-        return jsonify({'error': 'Temporada não encontrada.'}), 404
+    season = Season.query.get(season_id)
+    if not season: return jsonify({'error': 'Temporada não encontrada.'}), 404
     try:
-        db.session.delete(season_to_delete)
-        db.session.commit()
+        db.session.delete(season); db.session.commit()
         return jsonify({'message': 'Temporada e todos os seus registros foram excluídos com sucesso!'}), 200
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'Erro ao excluir a temporada: {e}'}), 500
+        db.session.rollback(); return jsonify({'error': f'Erro ao excluir a temporada: {e}'}), 500
 
-# --- Rota de Histórico ---
+# --- ROTA DE HISTÓRICO ---
 @app.route('/history/<string:habby_id>', methods=['GET'])
 @login_required
 def get_user_history(habby_id):
     try:
-        participations = db.session.query(
-            Season.id.label('season_id'), Season.start_date, Participant.fase,
-            (Participant.r1 + Participant.r2 + Participant.r3).label('total'), Participant.name
-        ).join(Participant, Season.id == Participant.season_id)\
-         .filter(Participant.habby_id == habby_id)\
-         .order_by(Season.start_date.desc()).all()
-
-        if not participations:
-            return jsonify({}), 200
-
-        history_list = []
-        for i, current in enumerate(participations):
-            season_id = current.season_id
-            season_ranking = db.session.query(Participant).filter_by(season_id=season_id)\
-                .order_by(Participant.fase.desc(), (Participant.r1 + Participant.r2 + Participant.r3).desc()).all()
-            
-            position = next((idx + 1 for idx, p in enumerate(season_ranking) if p.habby_id == habby_id), None)
-            
-            evolution = '-'
-            if i + 1 < len(participations):
-                previous = participations[i + 1]
-                if current.fase is not None and previous.fase is not None:
-                    evolution = current.fase - previous.fase
-            
-            history_list.append({
-                'season_id': season_id,
-                'start_date': current.start_date.strftime('%Y-%m-%d'),
-                'position': position,
-                'fase_acesso': current.fase,
-                'evolution': evolution
-            })
+        participations = db.session.query(Season.id.label('season_id'), Season.start_date, Participant.fase).join(Participant, Season.id == Participant.season_id).filter(Participant.habby_id == habby_id).order_by(Season.start_date.desc()).all()
+        if not participations: return jsonify({}), 200
         
-        return jsonify(history_list[0] if history_list else {}), 200
+        latest = participations[0]
+        season_ranking = Participant.query.filter_by(season_id=latest.season_id).order_by(Participant.fase.desc(), (Participant.r1 + Participant.r2 + Participant.r3).desc()).all()
+        position = next((i + 1 for i, p in enumerate(season_ranking) if p.habby_id == habby_id), None)
         
+        evolution = 0
+        if len(participations) > 1:
+            previous = participations[1]
+            if latest.fase is not None and previous.fase is not None:
+                evolution = latest.fase - previous.fase
+        
+        return jsonify({'position': position, 'fase_acesso': latest.fase, 'evolution': evolution})
     except Exception as e:
         return jsonify({'error': 'Erro ao buscar histórico.'}), 500
-    
+
 # --- ROTAS DE HONRA ---
 @app.route('/honor-members-management', methods=['GET'])
 @roles_required(['admin', 'leader'])
 def get_honor_management_list():
     latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
-    if not latest_season:
-        return jsonify([])
-
-    participants = [{
-        'name': p.name, 'habby_id': p.habby_id,
-        'fase_acesso': p.fase_acesso, 'fase_ataque': p.fase_ataque
-    } for p in latest_season.participants]
-    return jsonify(participants)
+    if not latest_season: return jsonify([])
+    return jsonify([{'name': p.name, 'habby_id': p.habby_id, 'fase_acesso': p.fase_acesso, 'fase_ataque': p.fase_ataque} for p in latest_season.participants])
 
 @app.route('/honor-seasons', methods=['POST'])
 @roles_required(['admin', 'leader'])
 def create_honor_season():
     data = request.json
-    start_date_str = data.get('startDate')
-    end_date_str = data.get('endDate')
-    participants_data = data.get('participants', [])
-
-    if not start_date_str or not end_date_str or not participants_data:
-        return jsonify({'error': 'Datas e participantes são obrigatórios.'}), 400
-
+    start_date_str, end_date_str, participants_data = data.get('startDate'), data.get('endDate'), data.get('participants', [])
+    if not start_date_str or not end_date_str or not participants_data: return jsonify({'error': 'Datas e participantes são obrigatórios.'}), 400
     try:
-        start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
-        end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-        
-        new_season = HonorSeason(start_date=start_date, end_date=end_date)
-        db.session.add(new_season)
-        db.session.flush()
-
-        for index, p_data in enumerate(participants_data):
-            new_participant = HonorParticipant(
-                season_id=new_season.id, name=p_data['name'], habby_id=p_data['habby_id'],
-                fase_acesso=normalize_status(p_data.get('fase_acesso')),
-                fase_ataque=normalize_status(p_data.get('fase_ataque')),
-                sort_order=index
-            )
-            db.session.add(new_participant)
-            
+        new_season = HonorSeason(start_date=datetime.strptime(start_date_str, '%Y-%m-%d').date(), end_date=datetime.strptime(end_date_str, '%Y-%m-%d').date())
+        db.session.add(new_season); db.session.flush()
+        for i, p_data in enumerate(participants_data):
+            db.session.add(HonorParticipant(season_id=new_season.id, name=p_data['name'], habby_id=p_data['habby_id'], fase_acesso=normalize_status(p_data.get('fase_acesso')), fase_ataque=normalize_status(p_data.get('fase_ataque')), sort_order=i))
         db.session.commit()
         return jsonify({'message': 'Nova temporada de Honra criada com sucesso!', 'seasonId': new_season.id}), 201
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'Erro ao criar nova temporada: {e}'}), 500
+        db.session.rollback(); return jsonify({'error': f'Erro ao criar nova temporada: {e}'}), 500
 
 @app.route('/honor-seasons', methods=['GET'])
 def get_honor_seasons():
     seasons = HonorSeason.query.order_by(HonorSeason.start_date.asc()).all()
     result = []
     for s in seasons:
-        participants_data = [{
-            'id': p.id, 'name': p.name, 'habby_id': p.habby_id,
-            'fase_acesso': p.fase_acesso, 'fase_ataque': p.fase_ataque
-        } for p in s.participants]
-        result.append({
-            'id': s.id, 'start_date': s.start_date.isoformat(),
-            'end_date': s.end_date.isoformat(), 'participants': participants_data
-        })
+        participants_data = [{'id': p.id, 'name': p.name, 'habby_id': p.habby_id, 'fase_acesso': p.fase_acesso, 'fase_ataque': p.fase_ataque} for p in s.participants]
+        result.append({'id': s.id, 'start_date': s.start_date.isoformat(), 'end_date': s.end_date.isoformat(), 'participants': participants_data})
     return jsonify(result)
 
 @app.route('/honor-seasons/<int:season_id>', methods=['DELETE'])
 @roles_required(['admin'])
 def delete_honor_season(season_id):
-    season_to_delete = HonorSeason.query.get(season_id)
-    if not season_to_delete:
-        return jsonify({'error': 'Temporada de honra não encontrada.'}), 404
+    season = HonorSeason.query.get(season_id)
+    if not season: return jsonify({'error': 'Temporada de honra não encontrada.'}), 404
     try:
-        db.session.delete(season_to_delete)
-        db.session.commit()
+        db.session.delete(season); db.session.commit()
         return jsonify({'message': 'Temporada de honra excluída com sucesso!'}), 200
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'Erro ao excluir temporada de honra: {e}'}), 500
+        db.session.rollback(); return jsonify({'error': f'Erro ao excluir temporada de honra: {e}'}), 500
 
 @app.route('/latest-honor-members', methods=['GET'])
 def get_latest_honor_members():
     latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
-    if not latest_season:
-        return jsonify({'members': [], 'period': 'Nenhuma temporada definida.'})
-
-    top_members_data = db.session.query(
-        HonorParticipant.name,
-        HonorParticipant.habby_id,
-        UserProfile.profile_pic_url
-    ).outerjoin(
-        UserProfile, UserProfile.habby_id == HonorParticipant.habby_id
-    ).filter(
-        HonorParticipant.season_id == latest_season.id
-    ).order_by(
-        HonorParticipant.sort_order.asc()
-    ).limit(2).all()
-        
-    members = [{
-        'name': p.name,
-        'habby_id': p.habby_id,
-        'profile_pic_url': p.profile_pic_url or "https://ik.imagekit.io/wzl99vhez/toxicos/indefinido.png?updatedAt=1750707356953"
-    } for p in top_members_data]
+    if not latest_season: return jsonify({'members': [], 'period': 'Nenhuma temporada definida.'})
     
+    top_members = db.session.query(HonorParticipant.name, HonorParticipant.habby_id, UserProfile.profile_pic_url).outerjoin(UserProfile, UserProfile.habby_id == HonorParticipant.habby_id).filter(HonorParticipant.season_id == latest_season.id).order_by(HonorParticipant.sort_order.asc()).limit(2).all()
+    members = [{'name': p.name, 'habby_id': p.habby_id, 'profile_pic_url': p.profile_pic_url or "https://ik.imagekit.io/wzl99vhez/toxicos/indefinido.png?updatedAt=1750707356953"} for p in top_members]
     period = f"De: {latest_season.start_date.strftime('%d/%m/%Y')} a Até: {latest_season.end_date.strftime('%d/%m/%Y')}"
-    
     return jsonify({'members': members, 'period': period})
 
 @app.route('/honor-status/<string:habby_id>', methods=['GET'])
 def get_honor_status(habby_id):
     latest_season = HonorSeason.query.order_by(HonorSeason.start_date.desc()).first()
+    if not latest_season: return jsonify({'is_honor_member': False})
     
-    if not latest_season:
-        return jsonify({'is_honor_member': False})
-
-    top_members_ids = [
-        p.habby_id for p in HonorParticipant.query
-        .filter_by(season_id=latest_season.id)
-        .order_by(HonorParticipant.sort_order.asc())
-        .limit(2).all()
-    ]
-    
-    is_member = habby_id in top_members_ids
-    
+    is_member = HonorParticipant.query.filter(HonorParticipant.season_id == latest_season.id, HonorParticipant.habby_id == habby_id, HonorParticipant.sort_order < 2).first() is not None
     return jsonify({'is_honor_member': is_member})
 
-# --- Rotas de Conteúdo da Home ---
+# --- ROTAS DE CONTEÚDO DA HOME ---
 @app.route('/home-content', methods=['GET'])
 def get_home_content():
     content = HomeContent.query.get(1)
     if content:
-        requirements_list = content.requirements.split(';') if content.requirements else []
-        return jsonify({
-            'leader': content.leader, 'focus': content.focus, 'league': content.league,
-            'requirements': requirements_list, 'content_section': content.content_section
-        })
+        return jsonify({'leader': content.leader, 'focus': content.focus, 'league': content.league, 'requirements': content.requirements.split(';') if content.requirements else [], 'content_section': content.content_section})
     return jsonify({'error': 'Conteúdo não encontrado.'}), 404
 
 @app.route('/home-content', methods=['PUT'])
 @roles_required(['admin'])
 def update_home_content():
-    data = request.json
-    content = HomeContent.query.get(1)
-    if not content:
-        return jsonify({'error': 'Conteúdo não encontrado para atualizar.'}), 404
-
-    requirements_str = ';'.join(data.get('requirements', []))
+    data, content = request.json, HomeContent.query.get(1)
+    if not content: return jsonify({'error': 'Conteúdo não encontrado para atualizar.'}), 404
     try:
-        content.leader = data.get('leader')
-        content.focus = data.get('focus')
-        content.league = data.get('league')
-        content.requirements = requirements_str
-        content.content_section = data.get('content_section')
+        content.leader, content.focus, content.league, content.requirements, content.content_section = data.get('leader'), data.get('focus'), data.get('league'), ';'.join(data.get('requirements', [])), data.get('content_section')
         db.session.commit()
         return jsonify({'message': 'Conteúdo da Home atualizado com sucesso!'})
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'Erro ao atualizar conteúdo: {e}'}), 500
+        db.session.rollback(); return jsonify({'error': f'Erro ao atualizar conteúdo: {e}'}), 500
 
-
-# <<< NOVAS ROTAS PARA O JOGO DA COBRINHA >>>
+# <<< ROTAS PARA O JOGO DA COBRINHA >>>
 @app.route('/snake-scores', methods=['GET'])
 def get_snake_scores():
-    """Busca os 10 melhores scores para o ranking."""
     try:
         scores = SnakeScore.query.order_by(SnakeScore.score.desc()).limit(10).all()
-        return jsonify([{'username': s.username, 'score': s.score, 'difficulty': s.difficulty} for s in scores])
+        return jsonify([{'username': s.username, 'score': s.score, 'difficulty': s.difficulty, 'completed_game': s.completed_game} for s in scores])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/snake-scores', methods=['POST'])
 @login_required
 def add_snake_score():
-    """
-    Salva ou atualiza a pontuação de um usuário.
-    Se o usuário não tiver pontuação, uma nova é criada.
-    Se a nova pontuação for maior que a antiga, a antiga é atualizada.
-    """
     data = request.get_json()
-    username = data.get('username')
-    new_score = data.get('score')
-    difficulty = data.get('difficulty') # Dificuldade máxima alcançada
-
-    if not all([username, new_score is not None, difficulty]):
-        return jsonify({'error': 'Dados incompletos'}), 400
-
-    user = User.query.filter_by(username=username).first()
-    if not user or user.id != session.get('user_id'):
-        return jsonify({'error': 'Usuário inválido ou não corresponde à sessão.'}), 403
+    new_score, difficulty, completed = data.get('score'), data.get('difficulty'), data.get('completed', False)
+    if new_score is None or not difficulty: return jsonify({'error': 'Dados incompletos'}), 400
+    
+    user = User.query.get(session.get('user_id'))
+    if not user: return jsonify({'error': 'Usuário da sessão não encontrado.'}), 403
 
     try:
-        # Verifica se já existe uma pontuação para este usuário
         existing_score = SnakeScore.query.filter_by(user_id=user.id).first()
-
         if existing_score:
-            # Se a nova pontuação for maior, atualiza
             if new_score > existing_score.score:
-                existing_score.score = new_score
-                existing_score.difficulty = difficulty
-                existing_score.created_at = datetime.utcnow()
+                existing_score.score, existing_score.difficulty, existing_score.created_at = new_score, difficulty, datetime.utcnow()
+                if completed: existing_score.completed_game = True
                 db.session.commit()
                 return jsonify({'message': 'Sua pontuação recorde foi atualizada!'}), 200
             else:
+                if completed and not existing_score.completed_game:
+                    existing_score.completed_game = True
+                    db.session.commit()
+                    return jsonify({'message': 'Status de vitória atualizado!'}), 200
                 return jsonify({'message': 'Pontuação não superou o recorde anterior.'}), 200
         else:
-            # Se não existir, cria um novo registro
-            new_score_entry = SnakeScore(
-                user_id=user.id,
-                username=user.username,
-                score=new_score,
-                difficulty=difficulty
-            )
-            db.session.add(new_score_entry)
+            db.session.add(SnakeScore(user_id=user.id, username=user.username, score=new_score, difficulty=difficulty, completed_game=completed))
             db.session.commit()
             return jsonify({'message': 'Pontuação salva com sucesso!'}), 201
-
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'Erro ao salvar pontuação: {e}'}), 500
-
+        db.session.rollback(); return jsonify({'error': f'Erro ao salvar pontuação: {e}'}), 500
 
 # --- ROTAS DE BACKUP E RESTAURAÇÃO ---
 @app.route('/backup', methods=['GET'])
 @roles_required(['admin'])
 def backup_data():
     try:
-        users_list = [model_to_dict(u) for u in User.query.all()]
         participants_list = []
         for p in Participant.query.all():
-            participant_dict = model_to_dict(p)
-            participant_dict['total'] = p.total
-            participants_list.append(participant_dict)
-
+            p_dict = model_to_dict(p); p_dict['total'] = p.total; participants_list.append(p_dict)
+        
         full_backup = {
-            'users': users_list,
+            'users': [model_to_dict(u) for u in User.query.all()],
             'user_profiles': [model_to_dict(up) for up in UserProfile.query.all()],
             'seasons': [model_to_dict(s) for s in Season.query.all()],
             'participants': participants_list,
             'home_content': [model_to_dict(hc) for hc in HomeContent.query.all()],
             'honor_seasons': [model_to_dict(hs) for hs in HonorSeason.query.all()],
             'honor_participants': [model_to_dict(hp) for hp in HonorParticipant.query.all()],
-            # <<< NOVO: Adiciona os scores do jogo ao backup >>>
             'snake_scores': [model_to_dict(ss) for ss in SnakeScore.query.all()],
         }
-        
         return jsonify(full_backup)
     except Exception as e:
         return jsonify({'error': 'Ocorreu um erro interno ao gerar o backup.', 'details': str(e)}), 500
@@ -746,19 +563,14 @@ def backup_data():
 @app.route('/restore', methods=['POST'])
 @roles_required(['admin'])
 def restore_data():
-    if 'file' not in request.files:
-        return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
-
+    if 'file' not in request.files: return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'Nenhum arquivo selecionado.'}), 400
+    if file.filename == '': return jsonify({'error': 'Nenhum arquivo selecionado.'}), 400
 
     try:
         data = json.load(file)
-
-        # <<< NOVO: Limpa a tabela de scores do jogo >>>
+        # Limpa todas as tabelas na ordem correta
         db.session.query(SnakeScore).delete()
-        
         db.session.query(HonorParticipant).delete()
         db.session.query(Participant).delete()
         db.session.query(UserProfile).delete()
@@ -768,52 +580,30 @@ def restore_data():
         db.session.query(HomeContent).delete()
         db.session.commit()
 
-        for user_data in data.get('users', []):
-            db.session.add(User(**user_data))
-
-        for profile_data in data.get('user_profiles', []):
-            db.session.add(UserProfile(**profile_data))
+        # Restaura os dados
+        for user_data in data.get('users', []): db.session.add(User(**user_data))
+        for profile_data in data.get('user_profiles', []): db.session.add(UserProfile(**profile_data))
         db.session.commit()
 
-        for season_data in data.get('seasons', []):
-            season_data['start_date'] = date.fromisoformat(season_data['start_date'])
-            season_data['end_date'] = date.fromisoformat(season_data['end_date'])
-            season_data.pop('participants', None)
-            db.session.add(Season(**season_data))
-
-        for p_data in data.get('participants', []):
-            p_data.pop('total', None)
-            db.session.add(Participant(**p_data))
-
-        for hc_data in data.get('home_content', []):
-            db.session.add(HomeContent(**hc_data))
-
+        for s_data in data.get('seasons', []):
+            s_data.update({'start_date': date.fromisoformat(s_data['start_date']), 'end_date': date.fromisoformat(s_data['end_date'])}).pop('participants', None)
+            db.session.add(Season(**s_data))
+        for p_data in data.get('participants', []): p_data.pop('total', None); db.session.add(Participant(**p_data))
+        for hc_data in data.get('home_content', []): db.session.add(HomeContent(**hc_data))
         for hs_data in data.get('honor_seasons', []):
-            hs_data['start_date'] = date.fromisoformat(hs_data['start_date'])
-            hs_data['end_date'] = date.fromisoformat(hs_data['end_date'])
-            hs_data.pop('participants', None)
+            hs_data.update({'start_date': date.fromisoformat(hs_data['start_date']), 'end_date': date.fromisoformat(hs_data['end_date'])}).pop('participants', None)
             db.session.add(HonorSeason(**hs_data))
-            
-        for hp_data in data.get('honor_participants', []):
-            db.session.add(HonorParticipant(**hp_data))
-            
-        # <<< NOVO: Restaura os scores do jogo >>>
+        for hp_data in data.get('honor_participants', []): db.session.add(HonorParticipant(**hp_data))
         for ss_data in data.get('snake_scores', []):
-            if ss_data.get('created_at'):
-                 ss_data['created_at'] = datetime.fromisoformat(ss_data['created_at'])
+            if ss_data.get('created_at'): ss_data['created_at'] = datetime.fromisoformat(ss_data['created_at'])
             db.session.add(SnakeScore(**ss_data))
-
+        
         db.session.commit()
         return jsonify({'message': 'Restauração concluída com sucesso!'}), 200
-
-    except IntegrityError as e:
-        db.session.rollback()
-        return jsonify({'error': f'Erro de integridade nos dados: {e.orig}'}), 500
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'Erro ao restaurar dados: {e}'}), 500
+        db.session.rollback(); return jsonify({'error': f'Erro ao restaurar dados: {e}'}), 500
 
-# --- Função de Inicialização do Banco de Dados ---
+# --- FUNÇÃO DE INICIALIZAÇÃO DO BANCO DE DADOS ---
 def create_tables():
     with app.app_context():
         print("Criando/Verificando todas as tabelas no banco de dados...")
@@ -822,12 +612,7 @@ def create_tables():
         
         if not HomeContent.query.get(1):
             print("Inserindo conteúdo inicial da Home...")
-            default_content = HomeContent(
-                id=1, leader='Líder a definir', focus='Foco a definir',
-                league='Liga a definir', requirements='Requisito 1;Requisito 2',
-                content_section='Seção de conteúdo a definir.'
-            )
-            db.session.add(default_content)
+            db.session.add(HomeContent(id=1, leader='Líder a definir', focus='Foco a definir', league='Liga a definir', requirements='Requisito 1;Requisito 2', content_section='Seção de conteúdo a definir.'))
             db.session.commit()
             print("Conteúdo inicial inserido.")
 

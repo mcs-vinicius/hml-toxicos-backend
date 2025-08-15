@@ -667,30 +667,49 @@ def get_snake_scores():
 @app.route('/snake-scores', methods=['POST'])
 @login_required
 def add_snake_score():
-    """Salva a pontuação de um usuário logado."""
+    """
+    Salva ou atualiza a pontuação de um usuário.
+    Se o usuário não tiver pontuação, uma nova é criada.
+    Se a nova pontuação for maior que a antiga, a antiga é atualizada.
+    """
     data = request.get_json()
     username = data.get('username')
-    score = data.get('score')
-    difficulty = data.get('difficulty')
+    new_score = data.get('score')
+    difficulty = data.get('difficulty') # Dificuldade máxima alcançada
 
-    if not all([username, score is not None, difficulty]):
+    if not all([username, new_score is not None, difficulty]):
         return jsonify({'error': 'Dados incompletos'}), 400
 
-    # Validação para garantir que o usuário logado está salvando sua própria pontuação
     user = User.query.filter_by(username=username).first()
     if not user or user.id != session.get('user_id'):
         return jsonify({'error': 'Usuário inválido ou não corresponde à sessão.'}), 403
 
     try:
-        new_score = SnakeScore(
-            user_id=user.id,
-            username=user.username,
-            score=score,
-            difficulty=difficulty
-        )
-        db.session.add(new_score)
-        db.session.commit()
-        return jsonify({'message': 'Pontuação salva com sucesso!'}), 201
+        # Verifica se já existe uma pontuação para este usuário
+        existing_score = SnakeScore.query.filter_by(user_id=user.id).first()
+
+        if existing_score:
+            # Se a nova pontuação for maior, atualiza
+            if new_score > existing_score.score:
+                existing_score.score = new_score
+                existing_score.difficulty = difficulty
+                existing_score.created_at = datetime.utcnow()
+                db.session.commit()
+                return jsonify({'message': 'Sua pontuação recorde foi atualizada!'}), 200
+            else:
+                return jsonify({'message': 'Pontuação não superou o recorde anterior.'}), 200
+        else:
+            # Se não existir, cria um novo registro
+            new_score_entry = SnakeScore(
+                user_id=user.id,
+                username=user.username,
+                score=new_score,
+                difficulty=difficulty
+            )
+            db.session.add(new_score_entry)
+            db.session.commit()
+            return jsonify({'message': 'Pontuação salva com sucesso!'}), 201
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Erro ao salvar pontuação: {e}'}), 500
